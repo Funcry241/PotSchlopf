@@ -3,4 +3,3 @@ __pycache__/
 *.zip
 .env
 *.token
-/nas/abruf.env

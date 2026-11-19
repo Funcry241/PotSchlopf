@@ -1,4 +1,6 @@
-from contextlib import closing
+from contextlib import closing, redirect_stderr, redirect_stdout
+from io import StringIO
+import os
 from pathlib import Path
 import sqlite3
 from tempfile import TemporaryDirectory
@@ -6,7 +8,7 @@ import unittest
 from unittest.mock import patch
 from urllib.parse import urlsplit
 
-from abrufen import import_batch, save_page, validate_page
+from abrufen import import_batch, main, save_page, validate_page
 from archiv import prepare_archive
 
 
@@ -25,6 +27,40 @@ def page(*notes, cursor=1, more=False):
 
 
 class ArchiveTests(unittest.TestCase):
+    def test_continuous_import_reports_empty_start_and_recovery(self):
+        class Uhr:
+            runden = 0
+
+            def wait(self, sekunden):
+                Uhr.runden += 1
+                return Uhr.runden >= 4
+
+            def set(self):
+                pass
+
+        stdout, stderr = StringIO(), StringIO()
+        with (
+            TemporaryDirectory() as folder,
+            patch("sys.argv", ["abrufen.py", "--ordner", folder, "--dauerhaft"]),
+            patch.dict(os.environ, {"POTSCHLOPF_SERVICE_URL": "https://potschlopf.example"}),
+            patch("abrufen.os.umask"),
+            patch("abrufen.signal.signal"),
+            patch("abrufen.threading.Event", Uhr),
+            patch("abrufen.LEBENSZEICHEN", Path(folder) / "ok"),
+            patch("abrufen.import_batch", side_effect=[0, 0, OSError("Zeitüberschreitung"), 0]),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            self.assertEqual(main(), 0)
+
+        ausgabe = stdout.getvalue()
+        self.assertEqual(ausgabe.count("Archivabruf erfolgreich. Übernommene Notizen 0."), 1)
+        self.assertIn("Alles wieder gut", ausgabe)
+        fehler = stderr.getvalue().splitlines()
+        self.assertEqual(len(fehler), 1)
+        self.assertTrue(fehler[0].startswith("Archivabruf unterbrochen."))
+        self.assertIn("Zeitüberschreitung", fehler[0])
+
     def test_rejects_malformed_payload_before_storage(self):
         for payload in (
             page(record(2), record(1), cursor=1),
