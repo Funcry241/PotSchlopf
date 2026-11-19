@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import sqlite3
 import sys
 from time import sleep
@@ -15,6 +16,7 @@ from archiv import enforce_database_limit, prepare_archive
 
 
 PAGE_SIZE = 12
+POLL_INTERVAL_SECONDS = 60
 MAX_RESPONSE_BYTES = 160 * 1024
 MAX_SEQUENCE = 2**53 - 1
 NOTE_ID = re.compile(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")
@@ -102,7 +104,11 @@ def fetch_page(origin, after):
             body = response.read(MAX_RESPONSE_BYTES + 1)
     if len(body) > MAX_RESPONSE_BYTES:
         raise ValueError("Archivantwort zu groß.")
-    return validate_page(json.loads(body.decode("utf-8")), after)
+    try:
+        data = json.loads(body.decode("utf-8"))
+    except (ValueError, RecursionError) as error:
+        raise ValueError("Die Antwort des Notizdienstes ist unlesbar.") from error
+    return validate_page(data, after)
 
 
 def read_cursor(database, source):
@@ -116,22 +122,34 @@ def read_cursor(database, source):
 
 def save_page(database_path, source, after, page):
     notes, cursor, _ = page
+    inserted = 0
     with closing(sqlite3.connect(database_path)) as database, database:
         enforce_database_limit(database)
         database.execute("BEGIN IMMEDIATE")
         database.execute(SYNC_TABLE)
         if read_cursor(database, source) != after:
             raise RuntimeError("Der Abrufstand hat sich während des Downloads geändert.")
-        database.executemany(
-            "INSERT INTO notizen (id, absender, erstellt_utc, inhalt) VALUES (?, ?, ?, ?)",
-            notes,
-        )
+        for note in notes:
+            result = database.execute(
+                "INSERT INTO notizen (id, absender, erstellt_utc, inhalt) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(id) DO NOTHING",
+                note,
+            )
+            if result.rowcount:
+                inserted += 1
+                continue
+            stored_note = database.execute(
+                "SELECT id, absender, erstellt_utc, inhalt FROM notizen WHERE id = ?",
+                (note[0],),
+            ).fetchone()
+            if stored_note != note:
+                raise sqlite3.IntegrityError("Eine Notiz-ID ist bereits mit anderem Inhalt im Archiv.")
         database.execute(
             "INSERT INTO abrufstand (id, dienst, folge) VALUES (1, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET folge = excluded.folge",
             (source, cursor),
         )
-    return len(notes)
+    return inserted
 
 
 def import_batch(database_path, origin):
@@ -159,27 +177,46 @@ def main():
     os.umask(0o077)
     try:
         origin = settings()
-        prepare_archive(database_path)
-    except (OSError, ValueError, RuntimeError, sqlite3.Error) as error:
-        print(f"Archivabruf konnte nicht gestartet werden. {error}", file=sys.stderr)
+    except ValueError as error:
+        print(f"Prüfe die Dienstadresse in abruf.env. {error}", file=sys.stderr)
         return 1
 
-    last_fetch_succeeded = False
+    archive_ready = False
+    first_success = True
+    last_problem = None
     while True:
         try:
+            if not archive_ready:
+                prepare_archive(database_path)
+                archive_ready = True
+                if args.dauerhaft:
+                    print("PotSchlopf-Archiv bereit.")
             imported = import_batch(database_path, origin)
-            if imported or not last_fetch_succeeded:
-                print(f"Archivabruf erfolgreich. Übernommene Notizen {imported}.")
-            last_fetch_succeeded = True
         except (OSError, ValueError, RuntimeError, HTTPException, sqlite3.Error) as error:
-            last_fetch_succeeded = False
-            print(f"Archivabruf unterbrochen. {error}", file=sys.stderr)
+            phase = ("Der Notizabruf ist gerade unterbrochen." if archive_ready
+                     else "Das Archiv ist gerade nicht verfügbar.")
+            problem = f"{phase} ({error})"
             if not args.dauerhaft:
+                print(problem, file=sys.stderr)
                 return 1
-        if not args.dauerhaft:
-            return 0
-        sleep(60)
+            if problem != last_problem:
+                print(f"PotSchlopf wartet. {problem} Nächster Versuch in {POLL_INTERVAL_SECONDS} Sekunden.",
+                      file=sys.stderr)
+                last_problem = problem
+        else:
+            if imported or first_success or last_problem is not None:
+                print(f"Archivabruf erfolgreich. Übernommene Notizen {imported}.")
+            first_success = False
+            last_problem = None
+            if not args.dauerhaft:
+                return 0
+        sleep(POLL_INTERVAL_SECONDS)
+
+
+def stop(_signal, _frame):
+    raise SystemExit(0)
 
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, stop)
     raise SystemExit(main())

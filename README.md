@@ -14,6 +14,12 @@ Du brauchst **DSM 7.2 oder neuer** und **Container Manager** aus dem Paket-Zentr
 
 Das Protokoll des Containers `archivabruf` zeigt beim ersten erfolgreichen Abruf `Archivabruf erfolgreich.` Auch 0 übernommene Notizen zeigen, dass die Verbindung funktioniert. Die Dienstadresse ist in `abruf.env` voreingestellt.
 
+### Wenn etwas hakt
+
+- Bei **PotSchlopf wartet.** lass das Projekt laufen. Der Abruf versucht es jede Minute erneut. Bei Erfolg erscheint wieder **Archivabruf erfolgreich.**
+- Scheitert das Laden des Python-Images, prüfe die Internetverbindung des NAS und wiederhole **Aktion → Erstellen (Build)** im Container Manager. [Synology-Projekte](https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_project)
+- Für dieses Update stoppe das bestehende Projekt `potschlopf` und ersetze `Dockerfile`, `archiv.py` und `abrufen.py` im Projektordner. Wähle im selben Projekt **Erstellen (Build)** und **Starten**. So verwendet der Abruf das vorhandene Archiv-Volume. [Synology-Projekte](https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_project)
+
 ## Freundlicher Hafen und Schutz des NAS
 
 Otter stellt den Hafen freiwillig bereit. Die Notizen sind öffentlich. Otter und sein Bruder lesen wohlwollend mit. Die Rolle der beiden im Notizbuch ist das Beobachten.

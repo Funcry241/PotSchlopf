@@ -34,8 +34,9 @@ class ArchiveTests(unittest.TestCase):
             patch("sys.argv", ["abrufen.py", "--ordner", folder, "--dauerhaft"]),
             patch.dict(os.environ, {"POTSCHLOPF_SERVICE_URL": "https://potschlopf.example"}),
             patch("abrufen.os.umask"),
-            patch("abrufen.import_batch", side_effect=[0, 0, OSError("Zeitüberschreitung"), 0]),
-            patch("abrufen.sleep", side_effect=[None, None, None, KeyboardInterrupt]),
+            patch("abrufen.import_batch", side_effect=[0, 0, OSError("Zeitüberschreitung"),
+                                                     OSError("Zeitüberschreitung"), 0]),
+            patch("abrufen.sleep", side_effect=[None, None, None, None, KeyboardInterrupt]),
             redirect_stdout(stdout),
             redirect_stderr(stderr),
         ):
@@ -43,8 +44,37 @@ class ArchiveTests(unittest.TestCase):
                 main()
 
         success = "Archivabruf erfolgreich. Übernommene Notizen 0."
-        self.assertEqual(stdout.getvalue().splitlines(), [success, success])
-        self.assertEqual(stderr.getvalue().splitlines(), ["Archivabruf unterbrochen. Zeitüberschreitung"])
+        self.assertEqual(stdout.getvalue().splitlines(), ["PotSchlopf-Archiv bereit.", success, success])
+        self.assertEqual(stderr.getvalue().splitlines(), [
+            "PotSchlopf wartet. Der Notizabruf ist gerade unterbrochen. "
+            "(Zeitüberschreitung) Nächster Versuch in 60 Sekunden.",
+        ])
+
+    def test_continuous_import_waits_for_archive_to_be_available(self):
+        stdout, stderr = StringIO(), StringIO()
+        with TemporaryDirectory() as folder:
+            archive = Path(folder) / "archiv"
+
+            def wait_for_mount(_seconds):
+                if archive.exists():
+                    raise KeyboardInterrupt
+                archive.mkdir()
+
+            with (
+                patch("sys.argv", ["abrufen.py", "--ordner", str(archive), "--dauerhaft"]),
+                patch.dict(os.environ, {"POTSCHLOPF_SERVICE_URL": "https://potschlopf.example"}),
+                patch("abrufen.os.umask"),
+                patch("abrufen.fetch_page", return_value=([], 0, False)),
+                patch("abrufen.sleep", side_effect=wait_for_mount),
+                redirect_stdout(stdout),
+                redirect_stderr(stderr),
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    main()
+
+            self.assertEqual(prepare_archive(archive / "potschlopf.sqlite3"), 0)
+        self.assertIn("Das Archiv ist gerade nicht verfügbar.", stderr.getvalue())
+        self.assertIn("Archivabruf erfolgreich. Übernommene Notizen 0.", stdout.getvalue())
 
     def test_rejects_malformed_payload_before_storage(self):
         for payload in (
@@ -71,13 +101,16 @@ class ArchiveTests(unittest.TestCase):
                 self.assertEqual(import_batch(database, origin), 0)
                 fetch.assert_called_once_with(origin, 1)
 
-            duplicate = {**record(2), "id": record()["id"]}
+            replayed = {**record(), "folge": 2}
+            self.assertEqual(save_page(database, origin.netloc, 1, validate_page(page(replayed, cursor=2), 1)), 0)
+
+            conflicting = {**record(), "folge": 4, "inhalt": "Abweichender Inhalt"}
             with self.assertRaises(sqlite3.IntegrityError):
-                save_page(database, origin.netloc, 1, validate_page(page(record(2), {**duplicate, "folge": 3}, cursor=3), 1))
+                save_page(database, origin.netloc, 2, validate_page(page(record(3), conflicting, cursor=4), 2))
 
             with closing(sqlite3.connect(database)) as db:
                 self.assertEqual(db.execute("SELECT inhalt FROM notizen").fetchall(), [("Ein Text 🦦",)])
-                self.assertEqual(db.execute("SELECT folge FROM abrufstand").fetchone(), (1,))
+                self.assertEqual(db.execute("SELECT folge FROM abrufstand").fetchone(), (2,))
             with self.assertRaises(ValueError):
                 import_batch(database, urlsplit("https://anderer-dienst.example"))
             self.assertEqual(prepare_archive(database), 1)

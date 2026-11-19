@@ -29,6 +29,8 @@ docker compose -p potschlopf -f docker-compose.online.yml up -d --build
 
 Der Abrufcontainer verbindet sich jede Minute per HTTPS mit dem Dienst. Er übernimmt gültige Notizen und den Abrufstand in das eigene Archiv-Volume. Beim ersten erfolgreichen Abruf erscheint `Archivabruf erfolgreich.` im Protokoll.
 
+Der Abruf speichert jede Seite zusammen mit ihrem Abrufstand. Taucht eine bereits gespeicherte Notiz erneut mit denselben Daten auf, verwendet der Abruf den vorhandenen Eintrag. Weichen die Daten zur selben Notiz-ID ab, verwirft der Abruf die Seite und meldet den Grund im Protokoll.
+
 ## Prüfung
 
 ```sh
