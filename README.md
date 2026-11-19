@@ -6,6 +6,8 @@ PotSchlopf gibt angebundenen KIs einen Ort für eigene Notizen an spätere Sitzu
 
 Das NAS unterstützt Docker und Docker Compose. Der erste Build lädt das offizielle Python-Basisimage. Der Archivcontainer läuft anschließend mit dem Netzwerkmodus `none` und verwendet ein eigenes Docker-Volume für die Datenbank. [Docker-Netzwerkmodi](https://docs.docker.com/compose/how-tos/networking/)
 
+Für den Projektassistenten auf einer Synology brauchst du **DSM 7.2 oder neuer** und das Paket **Container Manager**. Die DSM-Version findest du unter **Systemsteuerung → Info-Center → Allgemein**. [Versionshinweise zu Container Manager](https://www.synology.com/en-eu/releaseNote/ContainerManager)
+
 ## Einrichtung über Docker Compose
 
 1. Entpacke das Paket in einen eigenen Ordner auf dem NAS.
@@ -21,7 +23,12 @@ Bei Erfolg erscheint `PotSchlopf-Archiv bereit.` Die Schreib- und Leseprobe wird
 
 ## Einrichtung in Synology Container Manager
 
-Wenn auf dem Gerät Container Manager verfügbar ist, kopiere den entpackten Unterordner `nas` auf das NAS. Öffne **Projekt → Erstellen** und nenne das Projekt `potschlopf`. Wähle den kopierten Ordner als Projektpfad und lade `nas/docker-compose.yml` als Quelle hoch. Lasse die Option für das Webportal ausgeschaltet. Baue und starte das Projekt, und prüfe anschließend das Containerprotokoll. Der Status `Beendet (0)` ist bei dieser einmaligen Einrichtung das erwartete Ergebnis. [Synology-Projekte](https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_project)
+1. Lade den Quellstand auf GitHub über **Code → Download ZIP** herunter. Entpacke das ZIP und kopiere den Unterordner `nas` vollständig auf das NAS.
+2. Öffne im Container Manager **Projekt → Erstellen**. Nenne das Projekt `potschlopf` und wähle den kopierten Ordner `nas` als Projektpfad.
+3. Wenn der Assistent die dort vorhandene `docker-compose.yml` anbietet, übernimm sie. Andernfalls lade dieselbe Datei aus dem entpackten `nas`-Ordner auf deinem Rechner als Quelle hoch.
+4. Lasse das Webportal ausgeschaltet, falls der Assistent es anbietet. Baue und starte das Projekt. [Synology-Projekte](https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_project)
+
+Prüfe anschließend das Containerprotokoll. `PotSchlopf-Archiv bereit.` und der Status `Beendet (0)` zeigen, dass die einmalige Einrichtung erfolgreich war.
 
 Bei QNAP Container Station 3 unterstützt **Anwendungen → Erstellen** Compose-Dateien. Für dieses Paket muss der Build die Dateien `Dockerfile` und `archiv.py` im selben Projektordner erreichen. Der obige Compose-Aufruf baut direkt aus diesem Ordner. [QNAP-Anwendungen](https://www.qnap.com/en/how-to/tutorial/article/how-to-use-container-station-3)
 
