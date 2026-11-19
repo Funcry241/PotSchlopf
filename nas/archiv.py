@@ -1,0 +1,86 @@
+import argparse
+from contextlib import closing
+from datetime import UTC, datetime
+import os
+from pathlib import Path
+import sqlite3
+import sys
+from uuid import uuid4
+
+
+SCHEMA_VERSION = 1
+MAX_DATABASE_BYTES = 64 * 1024 * 1024
+CREATE_NOTES = """
+CREATE TABLE notizen (
+    id TEXT PRIMARY KEY NOT NULL,
+    absender TEXT NOT NULL,
+    erstellt_utc TEXT NOT NULL,
+    inhalt TEXT NOT NULL CHECK (length(CAST(inhalt AS BLOB)) BETWEEN 1 AND 16384)
+)
+"""
+
+
+def prepare_archive(database_path: Path) -> int:
+    with closing(sqlite3.connect(database_path)) as database, database:
+        page_size = database.execute("PRAGMA page_size").fetchone()[0]
+        max_pages = MAX_DATABASE_BYTES // page_size
+        applied_limit = database.execute(f"PRAGMA max_page_count = {max_pages}").fetchone()[0]
+        if applied_limit != max_pages:
+            raise RuntimeError("Die vorhandene Datenbank überschreitet das Limit von 64 MiB.")
+
+        database.execute("BEGIN IMMEDIATE")
+        version = database.execute("PRAGMA user_version").fetchone()[0]
+        if version == 0:
+            existing_tables = database.execute("SELECT name FROM sqlite_schema LIMIT 1").fetchone()
+            if existing_tables:
+                raise RuntimeError("Die Datenbank enthält ein unbekanntes Schema.")
+            database.execute(CREATE_NOTES)
+            database.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        elif version != SCHEMA_VERSION:
+            raise RuntimeError(f"Die Archivversion {version} wird von diesem Paket nicht unterstützt.")
+
+        run_write_probe(database)
+
+    read_only_uri = database_path.resolve().as_uri() + "?mode=ro"
+    with closing(sqlite3.connect(read_only_uri, uri=True)) as database:
+        if database.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+            raise RuntimeError("SQLite meldet einen Fehler in der Archivdatei.")
+        return database.execute("SELECT COUNT(*) FROM notizen").fetchone()[0]
+
+
+def run_write_probe(database: sqlite3.Connection) -> None:
+    note_id = uuid4().hex
+    probe_text = "Schreib- und Leseprobe auf dem NAS."
+    database.execute("SAVEPOINT probe")
+    database.execute(
+        "INSERT INTO notizen (id, absender, erstellt_utc, inhalt) VALUES (?, ?, ?, ?)",
+        (note_id, "Einrichtung", datetime.now(UTC).isoformat(), probe_text),
+    )
+    result = database.execute("SELECT inhalt FROM notizen WHERE id = ?", (note_id,)).fetchone()
+    if result != (probe_text,):
+        raise RuntimeError("Die Schreib- und Leseprobe lieferte einen unerwarteten Text.")
+    database.execute("ROLLBACK TO probe")
+    database.execute("RELEASE probe")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Privates PotSchlopf-Archiv einrichten und prüfen.")
+    parser.add_argument("--ordner", type=Path, default=Path("/archiv"))
+    args = parser.parse_args()
+
+    os.umask(0o077)
+    try:
+        note_count = prepare_archive(args.ordner / "potschlopf.sqlite3")
+    except (OSError, RuntimeError, sqlite3.Error) as error:
+        print(f"Das Archiv konnte nicht eingerichtet werden. {error}", file=sys.stderr)
+        return 1
+
+    print("PotSchlopf-Archiv bereit.")
+    print("Schreib- und Leseprobe erfolgreich.")
+    unit = "Notiz" if note_count == 1 else "Notizen"
+    print(f"Das Archiv enthält {note_count} {unit}.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
