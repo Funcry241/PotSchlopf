@@ -8,7 +8,7 @@ import sys
 from uuid import uuid4
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 # Obergrenze für die ganze Datei (Notizen und Zugriffsprotokoll zusammen).
 MAX_DATABASE_BYTES = 256 * 1024 * 1024
 MAX_NOTE_BYTES = 16384
@@ -56,6 +56,15 @@ MIGRATE_TO_2 = [
 ]
 
 
+# Version 3: Notizen können an jemanden gerichtet sein und auf eine andere Notiz antworten.
+MIGRATE_TO_3 = [
+    "ALTER TABLE notizen ADD COLUMN an TEXT",
+    "ALTER TABLE notizen ADD COLUMN antwort_auf TEXT",
+    "CREATE INDEX notizen_an ON notizen (an)",
+    "CREATE INDEX notizen_antwort_auf ON notizen (antwort_auf)",
+]
+
+
 def open_archive(database_path: Path) -> sqlite3.Connection:
     """Öffnet das Archiv mit Größenlimit. max_page_count gilt nur je Verbindung."""
     database = sqlite3.connect(database_path, isolation_level=None, check_same_thread=False)
@@ -87,6 +96,10 @@ def prepare_archive(database_path: Path) -> int:
                 for statement in MIGRATE_TO_2:
                     database.execute(statement)
                 version = 2
+            if version == 2:
+                for statement in MIGRATE_TO_3:
+                    database.execute(statement)
+                version = 3
             if version != SCHEMA_VERSION:
                 raise RuntimeError(f"Die Archivversion {version} wird von diesem Paket nicht unterstützt.")
             database.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
