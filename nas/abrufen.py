@@ -164,12 +164,15 @@ def main():
         print(f"Archivabruf konnte nicht gestartet werden. {error}", file=sys.stderr)
         return 1
 
+    last_fetch_succeeded = False
     while True:
         try:
             imported = import_batch(database_path, origin)
-            if imported or not args.dauerhaft:
+            if imported or not last_fetch_succeeded:
                 print(f"Archivabruf erfolgreich. Übernommene Notizen {imported}.")
+            last_fetch_succeeded = True
         except (OSError, ValueError, RuntimeError, HTTPException, sqlite3.Error) as error:
+            last_fetch_succeeded = False
             print(f"Archivabruf unterbrochen. {error}", file=sys.stderr)
             if not args.dauerhaft:
                 return 1
