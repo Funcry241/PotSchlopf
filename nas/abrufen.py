@@ -1,6 +1,7 @@
 import argparse
 from contextlib import closing
 from datetime import datetime
+from errno import ENOSPC
 from http.client import HTTPSConnection, HTTPException
 import json
 import os
@@ -9,14 +10,18 @@ import re
 import signal
 import sqlite3
 import sys
-import threading
-from time import monotonic
+from time import monotonic, sleep, time
 from urllib.parse import urlsplit
 
 from archiv import enforce_database_limit, prepare_archive
 
 
 PAGE_SIZE = 12
+POLL_INTERVAL_SECONDS = 60
+RETRY_INTERVALS = (60, 120, 300, 600)
+RETRY_REMINDER_SECONDS = 30 * 60
+LAST_SUCCESS_FILE = Path("/tmp/potschlopf-letzter-erfolg")
+HEALTH_MAX_AGE_SECONDS = 15 * 60
 MAX_RESPONSE_BYTES = 160 * 1024
 MAX_SEQUENCE = 2**53 - 1
 NOTE_ID = re.compile(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")
@@ -168,61 +173,36 @@ def import_batch(database_path, origin):
     return imported
 
 
-LEBENSZEICHEN = Path("/tmp/potschlopf-letzter-erfolg")
-WARTEZEITEN = (60, 120, 300, 600)  # Sekunden: erst schnell, dann geduldiger
-ERINNERUNG_SEKUNDEN = 30 * 60
-
-
-def melde(text, fehler=False):
-    print(text, file=sys.stderr if fehler else sys.stdout, flush=True)
-
-
-def lebenszeichen():
-    """Für die Zustandsanzeige im Container Manager. Ein Fehler hier stört den Abruf nicht."""
+def health_status():
     try:
-        LEBENSZEICHEN.write_text(datetime.now().isoformat())
+        age = time() - LAST_SUCCESS_FILE.stat().st_mtime
     except OSError:
+        return 1
+    return 0 if 0 <= age < HEALTH_MAX_AGE_SECONDS else 1
+
+
+def log_success_time():
+    try:
+        LAST_SUCCESS_FILE.touch()
+    except OSError:
+        # Ältere Compose-Projekte haben kein beschreibbares /tmp.
         pass
 
 
-def warte_text(sekunden):
-    minuten = max(1, round(sekunden / 60))
-    return "einer Minute" if minuten == 1 else f"{minuten} Minuten"
-
-
-def erklaere(error, warte):
-    """Übersetzt einen Fehler in eine ruhige Meldung mit nächstem Schritt."""
-    nochmal = f"Nächster Versuch in {warte_text(warte)}."
-    text = str(error) or type(error).__name__
+def recovery_hint(error, archive_ready):
     if isinstance(error, sqlite3.Error):
-        if "readonly" in text or "unable to open" in text:
-            return ("Der Abruf darf gerade nicht in sein Archiv schreiben. Bitte das Projekt im Container Manager "
-                    "einmal stoppen und wieder starten. Die vorhandenen Notizen bleiben unangetastet. " + nochmal)
-        if "full" in text or "disk" in text:
-            return ("Das Archiv ist voll (Grenze 64 MiB) oder der Speicher des NAS reicht nicht. "
-                    "Bisher übernommene Notizen sind sicher. Bitte Otter Bescheid geben. " + nochmal)
-        return (f"Das Archiv meldet ein Problem ({text}). Die vorhandenen Notizen bleiben unangetastet. "
-                "Wenn das anhält, bitte diese Zeile an Otter schicken. " + nochmal)
-    if isinstance(error, PermissionError):
-        return ("Der Abruf darf gerade nicht in sein Archiv schreiben. Bitte das Projekt im Container Manager "
-                "einmal stoppen und wieder starten. " + nochmal)
+        code = getattr(error, "sqlite_errorcode", 0) & 255
+        if code == sqlite3.SQLITE_FULL:
+            return "Prüfe den freien NAS-Speicher und das Archivlimit von 64 MiB."
+        if code in (sqlite3.SQLITE_READONLY, sqlite3.SQLITE_CANTOPEN):
+            return "Falls das anhält, prüfe das Archiv-Volume im Container Manager."
+    if isinstance(error, OSError) and error.errno == ENOSPC:
+        return "Prüfe den freien Speicherplatz auf dem NAS."
+    if isinstance(error, PermissionError) or (isinstance(error, OSError) and not archive_ready):
+        return "Falls das anhält, prüfe das Archiv-Volume im Container Manager."
     if isinstance(error, (OSError, HTTPException)):
-        if isinstance(error, OSError) and error.errno == 28:
-            return "Auf dem NAS ist kein Platz mehr frei. Bisher übernommene Notizen sind sicher. " + nochmal
-        return (f"Der Notizdienst ist gerade nicht erreichbar ({text}). Das ist meist nach kurzer Zeit "
-                "vorbei. Falls es länger dauert: Hat das NAS Internet? " + nochmal)
-    if isinstance(error, RuntimeError) and "HTTP" in text:
-        return f"Der Notizdienst hat gerade ein Problem ({text}). Wir warten geduldig. " + nochmal
-    if isinstance(error, ValueError) and "anderen Dienst" in text:
-        return ("Dieses Archiv gehört zu einer anderen Dienstadresse. Damit nichts durcheinandergerät, "
-                "übernimmt der Abruf nichts. Bitte Otter Bescheid geben. " + nochmal)
-    if isinstance(error, ValueError):
-        return (f"Der Notizdienst hat Daten geschickt, die nicht ins Archiv passen ({text}). "
-                "Zur Sicherheit wurde davon nichts übernommen. Wenn das anhält, bitte Otter Bescheid geben. " + nochmal)
-    return f"Der Abruf ist kurz gestolpert ({text}). Nichts ist verloren. " + nochmal
-
-
-FEHLERARTEN = (OSError, ValueError, RuntimeError, HTTPException, sqlite3.Error)
+        return "Falls das anhält, prüfe die Internetverbindung des NAS."
+    return ""
 
 
 def main():
@@ -233,81 +213,64 @@ def main():
     database_path = args.ordner / "potschlopf.sqlite3"
     os.umask(0o077)
 
-    anhalten = threading.Event()
-
-    def bitte_anhalten(*_):
-        anhalten.set()
-
-    signal.signal(signal.SIGTERM, bitte_anhalten)
-    signal.signal(signal.SIGINT, bitte_anhalten)
-
-    melde("Hallo! Der PotSchlopf-Abruf startet.")
-
-    # Start: Dienstadresse prüfen und Archiv öffnen. Im Dauerbetrieb geduldig wiederholen statt abzustürzen.
-    versuch = 0
-    while True:
-        try:
-            origin = settings()
-            note_count = prepare_archive(database_path)
-            break
-        except FEHLERARTEN as error:
-            if isinstance(error, ValueError) and any(k in str(error) for k in ("POTSCHLOPF_SERVICE_URL", "HTTPS-Port")):
-                hinweis = ("Die Dienstadresse in docker-compose.yml ist nicht gültig. Bitte die Datei "
-                           "unverändert aus dem Paket nehmen oder Otter fragen.")
-            else:
-                hinweis = None
-            warte = WARTEZEITEN[min(versuch, len(WARTEZEITEN) - 1)]
-            if not args.dauerhaft:
-                melde(f"Archivabruf konnte nicht gestartet werden. {hinweis or erklaere(error, warte)}", fehler=True)
-                return 1
-            melde(f"Archivabruf konnte noch nicht starten. {hinweis or erklaere(error, warte)}", fehler=True)
-            versuch += 1
-            if anhalten.wait(warte):
-                melde("Der PotSchlopf-Abruf hält an. Bis bald!")
-                return 0
-
-    unit = "Notiz" if note_count == 1 else "Notizen"
-    melde(f"PotSchlopf-Archiv bereit. Es enthält {note_count} {unit}.")
-    melde(f"Archivabruf gestartet. Quelle {origin.hostname}"
-          + (", Abruf jede Minute." if args.dauerhaft else "."))
-
+    origin = None
+    archive_ready = False
     first_success = True
-    fehler_seit = None
-    letzte_meldung = ("", 0.0)
-    versuch = 0
+    last_problem = None
+    last_report = 0.0
+    failures = 0
     while True:
+        delay = POLL_INTERVAL_SECONDS
+        phase = "Prüfe die HTTPS-Dienstadresse in der Projektkonfiguration."
         try:
+            if origin is None:
+                origin = settings()
+            if not archive_ready:
+                phase = "Das Archiv ist gerade nicht verfügbar."
+                count = prepare_archive(database_path)
+                archive_ready = True
+                if args.dauerhaft:
+                    unit = "Notiz" if count == 1 else "Notizen"
+                    print(f"PotSchlopf-Archiv bereit. Es enthält {count} {unit}.")
+                    print(f"Der Notizabruf startet. Quelle {origin.hostname}.")
+            phase = "Der Notizabruf ist gerade unterbrochen."
             imported = import_batch(database_path, origin)
-        except FEHLERARTEN as error:
+        except (OSError, ValueError, RuntimeError, HTTPException, sqlite3.Error) as error:
+            problem = f"{phase} ({error}) {recovery_hint(error, archive_ready)}".rstrip()
             if not args.dauerhaft:
-                melde(f"Archivabruf unterbrochen. {erklaere(error, 0).rsplit(' Nächster', 1)[0]}", fehler=True)
+                print(problem, file=sys.stderr)
                 return 1
-            warte = WARTEZEITEN[min(versuch, len(WARTEZEITEN) - 1)]
-            versuch += 1
-            meldung = erklaere(error, warte)
-            jetzt = monotonic()
-            fehler_seit = fehler_seit or jetzt
-            art = type(error).__name__ + str(error)[:40]
-            # Dieselbe Störung nicht jede Minute wiederholen, sondern höchstens alle 30 Minuten.
-            if art != letzte_meldung[0] or jetzt - letzte_meldung[1] >= ERINNERUNG_SEKUNDEN:
-                melde(f"Archivabruf unterbrochen. {meldung}", fehler=True)
-                letzte_meldung = (art, jetzt)
+            delay = RETRY_INTERVALS[min(failures, len(RETRY_INTERVALS) - 1)]
+            failures += 1
+            now = monotonic()
+            if problem != last_problem or now - last_report >= RETRY_REMINDER_SECONDS:
+                print(f"PotSchlopf wartet. {problem} Nächster Versuch in {delay} Sekunden.", file=sys.stderr)
+                last_report = now
+            last_problem = problem
         else:
-            lebenszeichen()
-            if fehler_seit is not None:
-                dauer = warte_text(monotonic() - fehler_seit)
-                melde(f"Alles wieder gut: Der Abruf klappt wieder (nach etwa {dauer} Pause). Nichts ist verloren gegangen.")
-                fehler_seit, letzte_meldung, versuch = None, ("", 0.0), 0
-            if imported or first_success or not args.dauerhaft:
-                melde(f"Archivabruf erfolgreich. Übernommene Notizen {imported}.")
+            if args.dauerhaft:
+                log_success_time()
+            if last_problem is not None:
+                print("Alles wieder gut. Der Abruf funktioniert wieder.")
+            if imported or first_success or last_problem is not None:
+                print(f"Archivabruf erfolgreich. Übernommene Notizen {imported}.")
             first_success = False
-            warte = 60
+            last_problem = None
+            failures = 0
             if not args.dauerhaft:
                 return 0
-        if anhalten.wait(warte):
-            melde("Der PotSchlopf-Abruf hält an. Alle übernommenen Notizen sind sicher gespeichert. Bis bald!")
-            return 0
+        sleep(delay)
+
+
+def stop(_signal, _frame):
+    raise KeyboardInterrupt
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    signal.signal(signal.SIGTERM, stop)
+    try:
+        status = main()
+    except KeyboardInterrupt:
+        print("PotSchlopf hält an. Bis bald!")
+        status = 0
+    raise SystemExit(status)

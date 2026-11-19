@@ -46,9 +46,8 @@ Der erste Start lädt einmal das Python-Grundpaket herunter und dauert ein bis d
 Öffne im Container Manager links **Container**. Dort läuft `potschlopf-archivabruf-1`. Klicke ihn an und öffne den Reiter **Protokoll**. Nach etwa einer Minute stehen dort diese Zeilen:
 
 ```
-Hallo! Der PotSchlopf-Abruf startet.
 PotSchlopf-Archiv bereit. Es enthält 0 Notizen.
-Archivabruf gestartet. Quelle potschlopf.alpinesong8.chatgpt.site, Abruf jede Minute.
+Der Notizabruf startet. Quelle potschlopf.alpinesong8.chatgpt.site.
 Archivabruf erfolgreich. Übernommene Notizen …
 ```
 
@@ -58,19 +57,19 @@ Fertig. Ab jetzt holt das NAS jede Minute neue Notizen ab, auch nach einem Neust
 
 ## Wenn etwas nicht klappt
 
-Keine Sorge: Der Abruf ist geduldig. Bei Störungen versucht er es von selbst erneut, erst jede Minute, später alle zehn Minuten. Nach einem Stromausfall oder Neustart des NAS startet er von allein wieder. Bereits übernommene Notizen gehen dabei nie verloren, weil jede Notiz zusammen mit dem Abrufstand gespeichert wird oder gar nicht.
+Keine Sorge: Der Abruf ist geduldig. Bei Störungen versucht er es von selbst erneut, nach einer, zwei, fünf und dann höchstens zehn Minuten. Nach einem Stromausfall oder Neustart des NAS startet er von allein wieder. Bereits übernommene Notizen gehen dabei nie verloren, weil jede Notiz zusammen mit dem Abrufstand gespeichert wird oder gar nicht.
 
-Im Protokoll steht bei jeder Störung, was los ist und was als Nächstes passiert. Dieselbe Störung wird höchstens alle 30 Minuten wiederholt, damit das Protokoll lesbar bleibt. Sobald es wieder klappt, steht dort `Alles wieder gut`.
+Im Protokoll steht bei jeder Störung, was los ist und was als Nächstes passiert. Dieselbe Störung wird höchstens alle 30 Minuten wiederholt, damit das Protokoll lesbar bleibt. Störungen beginnen mit `PotSchlopf wartet.` Sobald es wieder klappt, steht dort `Alles wieder gut`.
 
 | Was du siehst | Was du tun kannst |
 |---|---|
 | Der Container ist **ungesund** (`unhealthy`) | Der letzte erfolgreiche Abruf ist mehr als 15 Minuten her. Schau ins Protokoll, dort steht der Grund. Meist reicht Abwarten. |
-| `Der Notizdienst ist gerade nicht erreichbar` | Abwarten. Wenn es länger als eine Stunde dauert, prüfe, ob das NAS Internet hat. |
-| `Der Notizdienst hat gerade ein Problem` | Nichts tun, der Abruf wartet. Wenn es länger als einen Tag dauert, sag Otter Bescheid. |
-| `Daten geschickt, die nicht ins Archiv passen` oder `anderen Dienstadresse` | Es wird zur Sicherheit nichts übernommen. Schick Otter die Zeile aus dem Protokoll. |
-| `Der Abruf darf gerade nicht in sein Archiv schreiben` | Im Container Manager unter **Projekt** → `potschlopf` einmal **Stoppen** und **Starten**. |
-| `Das Archiv ist voll` oder `kein Platz mehr frei` | Sag Otter Bescheid. Die vorhandenen Notizen sind sicher. |
-| `Die Dienstadresse in docker-compose.yml ist nicht gültig` | Nimm die Datei `docker-compose.yml` unverändert aus einem frischen Download. |
+| `Der Notizabruf ist gerade unterbrochen` mit `prüfe die Internetverbindung` | Abwarten. Wenn es länger als eine Stunde dauert, prüfe, ob das NAS Internet hat. |
+| `Der Notizabruf ist gerade unterbrochen` mit `HTTP 5…` | Nichts tun, der Abruf wartet. Wenn es länger als einen Tag dauert, sag Otter Bescheid. |
+| `Der Notizabruf ist gerade unterbrochen` mit `unlesbar`, `Ungültig…`, `anderen Dienst` oder `anderem Inhalt` | Es wird zur Sicherheit nichts übernommen. Schick Otter die Zeile aus dem Protokoll. |
+| `Das Archiv ist gerade nicht verfügbar` oder `prüfe das Archiv-Volume` | Im Container Manager unter **Projekt** → `potschlopf` einmal **Stoppen** und **Starten**. Hilft das nicht, sag Otter Bescheid. |
+| `Prüfe den freien NAS-Speicher` oder `freien Speicherplatz` | Das Archiv (64 MiB) oder das NAS ist voll. Sag Otter Bescheid. Die vorhandenen Notizen sind sicher. |
+| `Prüfe die HTTPS-Dienstadresse` | Nimm die Datei `docker-compose.yml` unverändert aus einem frischen Download. |
 | Beim Erstellen fehlt **Vorhandene docker-compose.yml verwenden** | Der Pfad stimmt nicht. Im gewählten Ordner muss direkt `docker-compose.yml` liegen, nicht noch ein Unterordner `nas`. |
 | Das Erstellen bricht ab, weil ein Image nicht geladen werden kann | Das NAS kam beim ersten Mal nicht ins Internet. Prüfe die Verbindung und klicke im Projekt auf **Aktion → Erstellen**. |
 | Der Projektname `potschlopf` ist schon vergeben | Es gibt schon ein älteres PotSchlopf-Projekt. Lege kein zweites an. Folge stattdessen unten **Neue Version einspielen** mit dem Ordner des vorhandenen Projekts. Das Archiv wird übernommen. |
