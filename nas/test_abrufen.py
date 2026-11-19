@@ -62,5 +62,88 @@ class ArchiveTests(unittest.TestCase):
             self.assertEqual(prepare_archive(database), 1)
 
 
+class FreundlicheMeldungenTests(unittest.TestCase):
+    def test_messages_name_cause_and_next_step(self):
+        import socket
+        from abrufen import erklaere
+        faelle = {
+            socket.gaierror(-2, "Name or service not known"): "nicht erreichbar",
+            RuntimeError("Notizdienst antwortet mit HTTP 503."): "Problem",
+            sqlite3.OperationalError("database or disk is full"): "voll",
+            sqlite3.OperationalError("attempt to write a readonly database"): "stoppen und wieder starten",
+            ValueError("Ungültige Archivseite."): "nichts übernommen",
+            ValueError("Das Archiv enthält einen Abrufstand für einen anderen Dienst."): "anderen Dienstadresse",
+        }
+        for fehler, erwartet in faelle.items():
+            with self.subTest(fehler=fehler):
+                text = erklaere(fehler, 120)
+                self.assertIn(erwartet, text)
+                self.assertIn("Nächster Versuch in 2 Minuten.", text)
+
+
+class GeduldigerAbrufTests(unittest.TestCase):
+    def run_main(self, ergebnisse, runden):
+        import io
+        import abrufen
+
+        class Uhr:
+            def __init__(self):
+                self.runden = 0
+
+            def wait(self, sekunden):
+                self.runden += 1
+                return self.runden >= runden
+
+            def set(self):
+                pass
+
+        aufrufe = iter(ergebnisse)
+
+        def import_batch(*_):
+            ergebnis = next(aufrufe)
+            if isinstance(ergebnis, Exception):
+                raise ergebnis
+            return ergebnis
+
+        ausgabe, fehler = io.StringIO(), io.StringIO()
+        with TemporaryDirectory() as folder, \
+                patch.dict("os.environ", {"POTSCHLOPF_SERVICE_URL": "https://potschlopf.example"}), \
+                patch("sys.argv", ["abrufen.py", "--dauerhaft", "--ordner", folder]), \
+                patch("abrufen.threading.Event", Uhr), \
+                patch("abrufen.signal.signal"), \
+                patch("abrufen.LEBENSZEICHEN", Path(folder) / "ok"), \
+                patch("abrufen.import_batch", import_batch), \
+                patch("sys.stdout", ausgabe), patch("sys.stderr", fehler):
+            self.assertEqual(abrufen.main(), 0)
+        return ausgabe.getvalue(), fehler.getvalue()
+
+    def test_keeps_going_after_outage_and_reports_recovery_once(self):
+        stoerung = OSError(101, "Network is unreachable")
+        aus, err = self.run_main([0, stoerung, stoerung, stoerung, 2], runden=5)
+        self.assertEqual(err.count("Archivabruf unterbrochen."), 1)
+        self.assertIn("Alles wieder gut", aus)
+        self.assertIn("Übernommene Notizen 2.", aus)
+        self.assertIn("Bis bald!", aus)
+
+    def test_bad_service_address_waits_instead_of_crashing(self):
+        import io
+        import abrufen
+
+        class Uhr:
+            def wait(self, sekunden):
+                return True
+
+            def set(self):
+                pass
+
+        fehler = io.StringIO()
+        with patch.dict("os.environ", {"POTSCHLOPF_SERVICE_URL": "http://unsicher.example"}), \
+                patch("sys.argv", ["abrufen.py", "--dauerhaft"]), \
+                patch("abrufen.threading.Event", Uhr), patch("abrufen.signal.signal"), \
+                patch("sys.stdout", io.StringIO()), patch("sys.stderr", fehler):
+            self.assertEqual(abrufen.main(), 0)
+        self.assertIn("Dienstadresse in docker-compose.yml", fehler.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

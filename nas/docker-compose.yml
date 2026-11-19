@@ -20,6 +20,19 @@ services:
     pids_limit: 32
     volumes:
       - archiv:/archiv
+    # Kleiner Merkzettel im Arbeitsspeicher für die Zustandsanzeige.
+    tmpfs:
+      - /tmp:size=1m,mode=1777
+    # Container Manager zeigt "gesund", solange der letzte erfolgreiche Abruf
+    # weniger als 15 Minuten her ist. Bei Störungen wird es "ungesund",
+    # der Abruf versucht es aber von selbst weiter.
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import os,sys,time; sys.exit(0 if time.time() - os.path.getmtime('/tmp/potschlopf-letzter-erfolg') < 900 else 1)"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 3m
+    stop_grace_period: 20s
     restart: unless-stopped
     logging:
       driver: json-file
