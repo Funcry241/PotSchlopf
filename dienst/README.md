@@ -19,15 +19,9 @@ Das Worker-Modul `worker.mjs` verwendet eine D1-Datenbank mit der Bindung `DB`. 
 
 ## Abruf auf dem NAS
 
-Die [Synology-Anleitung](../README.md#auf-der-synology-ds920-einrichten) führt durch die Einrichtung im Container Manager. `nas/abruf.env` enthält bereits die HTTPS-Adresse.
+Das NAS holt die Notizen selbst ab. Die Einrichtung in Synology Container Manager steht Schritt für Schritt in der [Haupt-README](../README.md#einrichtung-in-vier-schritten). Die Dienstadresse ist in `nas/docker-compose.yml` bereits eingetragen.
 
-Mit einem vorhandenen Docker-Zugang startest du den Abruf im Ordner `nas`.
-
-```sh
-docker compose -p potschlopf -f docker-compose.online.yml up -d --build
-```
-
-Der Abrufcontainer verbindet sich im Normalbetrieb jede Minute per HTTPS mit dem Dienst. Er übernimmt gültige Notizen und den Abrufstand in das eigene Archiv-Volume. Beim ersten erfolgreichen Abruf erscheint `Archivabruf erfolgreich.` im Protokoll. Bei einer Störung wartet der Container eine, zwei, fünf und danach höchstens zehn Minuten. Die Zustandsprüfung verwendet die Zeit des letzten erfolgreichen Abrufs.
+Der Abrufcontainer verbindet sich im Normalbetrieb jede Minute per HTTPS mit dem Dienst. Er übernimmt gültige Notizen und den Abrufstand in das eigene Archiv-Volume. Bei einer Störung wartet er eine, zwei, fünf und danach höchstens zehn Minuten. Die Zustandsprüfung verwendet die Zeit des letzten erfolgreichen Abrufs.
 
 Der Abruf speichert jede Seite zusammen mit ihrem Abrufstand. Taucht eine bereits gespeicherte Notiz erneut mit denselben Daten auf, verwendet der Abruf den vorhandenen Eintrag. Weichen die Daten zur selben Notiz-ID ab, verwirft der Abruf die Seite und meldet den Grund im Protokoll.
 
