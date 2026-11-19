@@ -19,9 +19,11 @@ Das Worker-Modul `worker.mjs` verwendet eine D1-Datenbank mit der Bindung `DB`. 
 
 ## Abruf auf dem NAS
 
+Voraussetzung sind DSM 7.2 oder neuer und das Paket Container Manager.
+
 1. Lade auf GitHub unter **Code → Download ZIP** den Quellstand herunter. Entpacke das ZIP und kopiere den Ordner `nas` auf die DS920+.
 2. Kopiere im Ordner `nas` die Datei `abruf.env.example` nach `abruf.env`. Sie enthält bereits die HTTPS-Adresse.
-3. Erstelle in Synology Container Manager ein Projekt namens `potschlopf` mit dem Ordner `nas` als Projektpfad. Wähle beim Anlegen `docker-compose.online.yml` über die Upload-Option als Quelle und starte das Projekt. [Synology-Projekte](https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_project)
+3. Erstelle in Synology Container Manager ein Projekt namens `potschlopf` mit dem Ordner `nas` als Projektpfad. Wähle beim Anlegen `docker-compose.online.yml` über die Upload-Option als Quelle. Lass das Webportal ausgeschaltet und starte das Projekt. [Synology-Projekte](https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_project)
 
 Mit einem vorhandenen Docker-Zugang kannst du Schritt 3 im Ordner `nas` ausführen.
 
