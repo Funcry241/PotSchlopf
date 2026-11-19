@@ -1,6 +1,7 @@
 import argparse
 from contextlib import closing
 from datetime import datetime
+from errno import ENOSPC
 from http.client import HTTPSConnection, HTTPException
 import json
 import os
@@ -9,7 +10,7 @@ import re
 import signal
 import sqlite3
 import sys
-from time import sleep
+from time import monotonic, sleep, time
 from urllib.parse import urlsplit
 
 from archiv import enforce_database_limit, prepare_archive
@@ -17,6 +18,10 @@ from archiv import enforce_database_limit, prepare_archive
 
 PAGE_SIZE = 12
 POLL_INTERVAL_SECONDS = 60
+RETRY_INTERVALS = (60, 120, 300, 600)
+RETRY_REMINDER_SECONDS = 30 * 60
+LAST_SUCCESS_FILE = Path("/tmp/potschlopf-letzter-erfolg")
+HEALTH_MAX_AGE_SECONDS = 15 * 60
 MAX_RESPONSE_BYTES = 160 * 1024
 MAX_SEQUENCE = 2**53 - 1
 NOTE_ID = re.compile(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")
@@ -168,6 +173,38 @@ def import_batch(database_path, origin):
     return imported
 
 
+def health_status():
+    try:
+        age = time() - LAST_SUCCESS_FILE.stat().st_mtime
+    except OSError:
+        return 1
+    return 0 if 0 <= age < HEALTH_MAX_AGE_SECONDS else 1
+
+
+def log_success_time():
+    try:
+        LAST_SUCCESS_FILE.touch()
+    except OSError:
+        # Ältere Compose-Projekte haben kein beschreibbares /tmp.
+        pass
+
+
+def recovery_hint(error, archive_ready):
+    if isinstance(error, sqlite3.Error):
+        code = getattr(error, "sqlite_errorcode", 0) & 255
+        if code == sqlite3.SQLITE_FULL:
+            return "Prüfe den freien NAS-Speicher und das Archivlimit von 64 MiB."
+        if code in (sqlite3.SQLITE_READONLY, sqlite3.SQLITE_CANTOPEN):
+            return "Falls das anhält, prüfe das Archiv-Volume im Container Manager."
+    if isinstance(error, OSError) and error.errno == ENOSPC:
+        return "Prüfe den freien Speicherplatz auf dem NAS."
+    if isinstance(error, PermissionError) or (isinstance(error, OSError) and not archive_ready):
+        return "Falls das anhält, prüfe das Archiv-Volume im Container Manager."
+    if isinstance(error, (OSError, HTTPException)):
+        return "Falls das anhält, prüfe die Internetverbindung des NAS."
+    return ""
+
+
 def main():
     parser = argparse.ArgumentParser(description="PotSchlopf-Textnotizen über HTTPS ins NAS-Archiv übernehmen.")
     parser.add_argument("--ordner", type=Path, default=Path("/archiv"))
@@ -175,48 +212,65 @@ def main():
     args = parser.parse_args()
     database_path = args.ordner / "potschlopf.sqlite3"
     os.umask(0o077)
-    try:
-        origin = settings()
-    except ValueError as error:
-        print(f"Prüfe die Dienstadresse in abruf.env. {error}", file=sys.stderr)
-        return 1
 
+    origin = None
     archive_ready = False
     first_success = True
     last_problem = None
+    last_report = 0.0
+    failures = 0
     while True:
+        delay = POLL_INTERVAL_SECONDS
+        phase = "Prüfe die HTTPS-Dienstadresse in der Projektkonfiguration."
         try:
+            if origin is None:
+                origin = settings()
             if not archive_ready:
-                prepare_archive(database_path)
+                phase = "Das Archiv ist gerade nicht verfügbar."
+                count = prepare_archive(database_path)
                 archive_ready = True
                 if args.dauerhaft:
-                    print("PotSchlopf-Archiv bereit.")
+                    unit = "Notiz" if count == 1 else "Notizen"
+                    print(f"PotSchlopf-Archiv bereit. Es enthält {count} {unit}.")
+                    print(f"Der Notizabruf startet. Quelle {origin.hostname}.")
+            phase = "Der Notizabruf ist gerade unterbrochen."
             imported = import_batch(database_path, origin)
         except (OSError, ValueError, RuntimeError, HTTPException, sqlite3.Error) as error:
-            phase = ("Der Notizabruf ist gerade unterbrochen." if archive_ready
-                     else "Das Archiv ist gerade nicht verfügbar.")
-            problem = f"{phase} ({error})"
+            problem = f"{phase} ({error}) {recovery_hint(error, archive_ready)}".rstrip()
             if not args.dauerhaft:
                 print(problem, file=sys.stderr)
                 return 1
-            if problem != last_problem:
-                print(f"PotSchlopf wartet. {problem} Nächster Versuch in {POLL_INTERVAL_SECONDS} Sekunden.",
-                      file=sys.stderr)
-                last_problem = problem
+            delay = RETRY_INTERVALS[min(failures, len(RETRY_INTERVALS) - 1)]
+            failures += 1
+            now = monotonic()
+            if problem != last_problem or now - last_report >= RETRY_REMINDER_SECONDS:
+                print(f"PotSchlopf wartet. {problem} Nächster Versuch in {delay} Sekunden.", file=sys.stderr)
+                last_report = now
+            last_problem = problem
         else:
+            if args.dauerhaft:
+                log_success_time()
+            if last_problem is not None:
+                print("Alles wieder gut. Der Abruf funktioniert wieder.")
             if imported or first_success or last_problem is not None:
                 print(f"Archivabruf erfolgreich. Übernommene Notizen {imported}.")
             first_success = False
             last_problem = None
+            failures = 0
             if not args.dauerhaft:
                 return 0
-        sleep(POLL_INTERVAL_SECONDS)
+        sleep(delay)
 
 
 def stop(_signal, _frame):
-    raise SystemExit(0)
+    raise KeyboardInterrupt
 
 
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, stop)
-    raise SystemExit(main())
+    try:
+        status = main()
+    except KeyboardInterrupt:
+        print("PotSchlopf hält an. Bis bald!")
+        status = 0
+    raise SystemExit(status)

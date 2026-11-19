@@ -16,9 +16,11 @@ Das Protokoll des Containers `archivabruf` zeigt beim ersten erfolgreichen Abruf
 
 ### Wenn etwas hakt
 
-- Bei **PotSchlopf wartet.** lass das Projekt laufen. Der Abruf versucht es jede Minute erneut. Bei Erfolg erscheint wieder **Archivabruf erfolgreich.**
+- Bei **PotSchlopf wartet.** lass das Projekt laufen. Der nächste Versuch folgt nach einer Minute. Bei längeren Störungen wächst der Abstand auf zwei, fünf und höchstens zehn Minuten. Bei Erfolg erscheint wieder **Archivabruf erfolgreich.**
 - Scheitert das Laden des Python-Images, prüfe die Internetverbindung des NAS und wiederhole **Aktion → Erstellen (Build)** im Container Manager. [Synology-Projekte](https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_project)
-- Für dieses Update stoppe das bestehende Projekt `potschlopf` und ersetze `Dockerfile`, `archiv.py` und `abrufen.py` im Projektordner. Wähle im selben Projekt **Erstellen (Build)** und **Starten**. So verwendet der Abruf das vorhandene Archiv-Volume. [Synology-Projekte](https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_project)
+- Für dieses Update stoppe das bestehende Projekt `potschlopf` und ersetze `abrufen.py` im Projektordner. Übernimm den Inhalt der neuen `docker-compose.online.yml` in der YAML-Konfiguration dieses Projekts. Wähle **Erstellen (Build)** und **Starten**. So verwendet der Abruf das vorhandene Archiv-Volume. [Synology-Projekte](https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_project)
+
+Die Docker-Zustandsprüfung kontrolliert einmal pro Minute, ob der letzte erfolgreiche Abruf weniger als 15 Minuten her ist. Das Protokoll zeigt dir bei Störungen den Grund und den nächsten Versuch.
 
 ## Freundlicher Hafen und Schutz des NAS
 

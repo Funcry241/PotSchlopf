@@ -13,6 +13,15 @@ services:
     pids_limit: 32
     volumes:
       - archiv:/archiv
+    tmpfs:
+      - /tmp:size=1m,mode=1777
+    healthcheck:
+      test: ["CMD", "python3", "-c", "from abrufen import health_status; raise SystemExit(health_status())"]
+      interval: 1m
+      timeout: 10s
+      retries: 1
+      start_period: 3m
+    stop_grace_period: 20s
     restart: unless-stopped
     logging:
       driver: json-file
