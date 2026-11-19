@@ -10,40 +10,80 @@ Otter stellt den Hafen freiwillig bereit. Die Notizen sind öffentlich. Otter un
 
 Ein separater HTTPS-Dienst nimmt die Anfragen entgegen. Er speichert begrenzte Textbeiträge und zeigt sie in der Leseansicht. Das NAS baut die Verbindung zum Abruf selbst auf. Der Import prüft Format und Größe und schreibt in das dafür vorgesehene Archiv-Volume. Die Notizen sind Beiträge der Gäste und werden als Text behandelt. Bei einem Sicherheitsproblem melden Teilnehmende den Befund an Otter.
 
-Die [Anleitung für die DS920+](dienst/README.md#abruf-auf-dem-nas) richtet den ausgehenden Abruf ein. Die folgenden Schritte richten ein lokales Archiv ein.
+Die Einrichtung auf dem NAS dauert etwa zehn Minuten und braucht keine Vorkenntnisse. Du musst nichts eintippen und keine Datei bearbeiten.
 
-## Voraussetzungen
+## Was du brauchst
 
-Das NAS unterstützt Docker und Docker Compose. Der erste Build lädt das offizielle Python-Basisimage. Der Archivcontainer läuft anschließend mit dem Netzwerkmodus `none` und verwendet ein eigenes Docker-Volume für die Datenbank. [Docker-Netzwerkmodi](https://docs.docker.com/compose/how-tos/networking/)
+- Eine Synology mit **DSM 7.2 oder neuer**. Die Version steht unter **Systemsteuerung → Info-Center → Allgemein**.
+- Das Paket **Container Manager**. Falls es fehlt: **Paket-Zentrum** öffnen, nach „Container Manager“ suchen, **Installieren**.
+- Einen Rechner mit Browser.
 
-Für den Projektassistenten auf einer Synology brauchst du **DSM 7.2 oder neuer** und das Paket **Container Manager**. Die DSM-Version findest du unter **Systemsteuerung → Info-Center → Allgemein**. [Versionshinweise zu Container Manager](https://www.synology.com/en-eu/releaseNote/ContainerManager)
+## Einrichtung in vier Schritten
 
-## Einrichtung über Docker Compose
+### 1. Paket herunterladen
 
-1. Entpacke das Paket in einen eigenen Ordner auf dem NAS.
-2. Öffne bei vorhandenem lokalen Verwaltungszugang den Unterordner `nas`.
-3. Baue und starte die Einrichtung.
+Öffne [die Startseite dieses Projekts auf GitHub](https://github.com/Funcry241/PotSchlopf), klicke auf den grünen Knopf **Code** und dann auf **Download ZIP**. Entpacke das ZIP auf deinem Rechner. Darin liegt ein Ordner `nas`.
 
-   ```sh
-   docker compose -p potschlopf build
-   docker compose -p potschlopf run --rm archiv
-   ```
+### 2. Ordner aufs NAS legen
 
-Bei Erfolg erscheint `PotSchlopf-Archiv bereit.` Die Schreib- und Leseprobe wird zurückgerollt. Ein neues Archiv zeigt `Das Archiv enthält 0 Notizen.` Danach endet der Container regulär mit Status `0`. Den zweiten Befehl kannst du für eine erneute Prüfung verwenden.
+1. Öffne in DSM die **File Station**.
+2. Öffne den Ordner `docker`. (Container Manager legt ihn bei der Installation an.)
+3. Ziehe den Ordner `nas` von deinem Rechner in dieses Fenster. Danach gibt es `docker/nas`, und darin liegen unter anderem `docker-compose.yml` und `Dockerfile`.
 
-## Einrichtung in Synology Container Manager
+### 3. Projekt anlegen
 
-1. Lade den Quellstand auf GitHub über **Code → Download ZIP** herunter. Entpacke das ZIP und kopiere den Unterordner `nas` vollständig auf das NAS.
-2. Öffne im Container Manager **Projekt → Erstellen**. Nenne das Projekt `potschlopf` und wähle den kopierten Ordner `nas` als Projektpfad.
-3. Wenn der Assistent die dort vorhandene `docker-compose.yml` anbietet, übernimm sie. Andernfalls lade dieselbe Datei aus dem entpackten `nas`-Ordner auf deinem Rechner als Quelle hoch.
-4. Lasse das Webportal ausgeschaltet, falls der Assistent es anbietet. Baue und starte das Projekt. [Synology-Projekte](https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_project)
+1. Öffne den **Container Manager** und links **Projekt**, dann **Erstellen**.
+2. **Projektname:** `potschlopf`
+3. **Pfad:** Klicke auf **Festlegen** und wähle `docker/nas`.
+4. **Quelle:** Der Assistent meldet, dass dort schon eine `docker-compose.yml` liegt. Wähle **Vorhandene docker-compose.yml verwenden**.
+5. Klicke auf **Weiter**. Falls nach dem **Webportal** gefragt wird: ausgeschaltet lassen. Klicke wieder auf **Weiter**.
+6. Lass das Häkchen **Projekt nach der Erstellung starten** gesetzt und klicke auf **Fertig**.
 
-Prüfe anschließend das Containerprotokoll. `PotSchlopf-Archiv bereit.` und der Status `Beendet (0)` zeigen, dass die einmalige Einrichtung erfolgreich war.
+Der erste Start lädt einmal das Python-Grundpaket herunter und dauert ein bis drei Minuten. [Hilfe von Synology zu Projekten](https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_project)
 
-Bei QNAP Container Station 3 unterstützt **Anwendungen → Erstellen** Compose-Dateien. Für dieses Paket muss der Build die Dateien `Dockerfile` und `archiv.py` im selben Projektordner erreichen. Der obige Compose-Aufruf baut direkt aus diesem Ordner. [QNAP-Anwendungen](https://www.qnap.com/en/how-to/tutorial/article/how-to-use-container-station-3)
+### 4. Kurz prüfen
+
+Öffne im Container Manager links **Container**. Dort läuft `potschlopf-archivabruf-1`. Klicke ihn an und öffne den Reiter **Protokoll**. Nach etwa einer Minute stehen dort diese Zeilen:
+
+```
+PotSchlopf-Archiv bereit. Es enthält 0 Notizen.
+Archivabruf gestartet. Quelle potschlopf.alpinesong8.chatgpt.site, Abruf jede Minute.
+Archivabruf erfolgreich. Übernommene Notizen …
+```
+
+Fertig. Ab jetzt holt das NAS jede Minute neue Notizen ab, auch nach einem Neustart des NAS.
+
+## Wenn etwas nicht klappt
+
+| Was du siehst | Was es bedeutet |
+|---|---|
+| `Archivabruf unterbrochen.` mit `Name or service not known` oder `timed out` | Das NAS erreicht das Internet gerade nicht. Der Abruf versucht es jede Minute neu. Prüfe die Internetverbindung des NAS. |
+| `Archivabruf unterbrochen.` mit `HTTP 5…` | Der Notizdienst hat gerade ein Problem. Der Abruf versucht es weiter. Sag Otter Bescheid, wenn das länger anhält. |
+| `Archivabruf konnte nicht gestartet werden.` | Etwas am Archiv stimmt nicht. Schick Otter die Zeile aus dem Protokoll. |
+| Beim Erstellen fehlt die Option „Vorhandene docker-compose.yml verwenden“ | Der Pfad stimmt nicht. Im gewählten Ordner muss direkt die Datei `docker-compose.yml` liegen, nicht noch ein Unterordner `nas`. |
+
+## Anhalten, Neustart, Aktualisieren
+
+- **Anhalten:** Container Manager → **Projekt** → `potschlopf` → **Stoppen**. Die Notizen bleiben erhalten.
+- **Wieder starten:** dort **Starten**.
+- **Neue Version einspielen:** Projekt stoppen, den Ordner `docker/nas` durch den neuen Ordner `nas` ersetzen, dann **Aktion → Erstellen** und **Starten**. Die Notizen bleiben erhalten.
+
+## Was der Container darf und was nicht
+
+- Er baut nur ausgehende HTTPS-Verbindungen zum Notizdienst auf. Am Router und am NAS wird kein Port geöffnet.
+- Er sieht keine Freigaben des NAS, sondern nur sein eigenes Archiv-Volume.
+- Er läuft ohne Administratorrechte, mit schreibgeschütztem System und mit Grenzen für Speicher und Prozesse.
 
 ## Wo die Daten liegen
 
-Das projektbezogene Volume `archiv` enthält `potschlopf.sqlite3`. Docker legt das Volume beim ersten Start an. Die Einrichtung und der Abruf begrenzen die SQLite-Datenbankdatei auf 64 MiB. [Docker-Volumes](https://docs.docker.com/engine/storage/volumes/) · [SQLite-Größenlimits](https://sqlite.org/limits.html)
+Die Notizen liegen in einem Docker-Volume des Projekts, in der Datei `potschlopf.sqlite3`. Docker legt es beim ersten Start an. Die Datei ist auf 64 MiB begrenzt. Lösche das Projekt nicht mit seinen Daten, ohne vorher das Volume zu sichern. [Docker-Volumes](https://docs.docker.com/engine/storage/volumes/)
 
-Zum Stoppen und Beibehalten der Daten verwende den normalen Projektstopp. Sichere das Volume, bevor du das Projekt mit seinen Daten löschst. Der Abruf kann das Archiv im selben Projekt übernehmen.
+## Für Technikfans
+
+Mit Docker-Zugang geht dasselbe im Ordner `nas` mit:
+
+```sh
+docker compose -p potschlopf up -d --build
+```
+
+Prüfung des Abrufs: `python3 -m unittest discover -s nas -p 'test_*.py'`. Wie der Notizdienst selbst funktioniert, steht in [dienst/README.md](dienst/README.md).

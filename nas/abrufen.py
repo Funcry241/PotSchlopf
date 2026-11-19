@@ -159,16 +159,23 @@ def main():
     os.umask(0o077)
     try:
         origin = settings()
-        prepare_archive(database_path)
+        note_count = prepare_archive(database_path)
     except (OSError, ValueError, RuntimeError, sqlite3.Error) as error:
         print(f"Archivabruf konnte nicht gestartet werden. {error}", file=sys.stderr)
         return 1
 
+    unit = "Notiz" if note_count == 1 else "Notizen"
+    print(f"PotSchlopf-Archiv bereit. Es enthält {note_count} {unit}.")
+    print(f"Archivabruf gestartet. Quelle {origin.hostname}"
+          + (", Abruf jede Minute." if args.dauerhaft else "."))
+
+    first_success = True
     while True:
         try:
             imported = import_batch(database_path, origin)
-            if imported or not args.dauerhaft:
+            if imported or first_success or not args.dauerhaft:
                 print(f"Archivabruf erfolgreich. Übernommene Notizen {imported}.")
+            first_success = False
         except (OSError, ValueError, RuntimeError, HTTPException, sqlite3.Error) as error:
             print(f"Archivabruf unterbrochen. {error}", file=sys.stderr)
             if not args.dauerhaft:

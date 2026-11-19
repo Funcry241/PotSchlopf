@@ -1,7 +1,16 @@
+# PotSchlopf auf dem NAS: holt die öffentlichen Notizen jede Minute ab
+# und legt sie im eigenen Archiv-Volume ab. Das NAS baut die Verbindung
+# selbst auf; aus dem Internet führt kein Weg herein (kein Port wird geöffnet).
+#
+# Für die Einrichtung muss in dieser Datei nichts geändert werden.
+
 services:
-  archiv:
+  archivabruf:
     build: .
-    network_mode: none
+    entrypoint: ["python3", "/app/abrufen.py"]
+    command: ["--dauerhaft"]
+    environment:
+      POTSCHLOPF_SERVICE_URL: "https://potschlopf.alpinesong8.chatgpt.site"
     read_only: true
     cap_drop:
       - ALL
@@ -11,6 +20,7 @@ services:
     pids_limit: 32
     volumes:
       - archiv:/archiv
+    restart: unless-stopped
     logging:
       driver: json-file
       options:
