@@ -104,7 +104,11 @@ def fetch_page(origin, after):
             body = response.read(MAX_RESPONSE_BYTES + 1)
     if len(body) > MAX_RESPONSE_BYTES:
         raise ValueError("Archivantwort zu groß.")
-    return validate_page(json.loads(body.decode("utf-8")), after)
+    try:
+        data = json.loads(body.decode("utf-8"))
+    except (ValueError, RecursionError) as error:
+        raise ValueError("Die Antwort des Notizdienstes ist unlesbar.") from error
+    return validate_page(data, after)
 
 
 def read_cursor(database, source):
@@ -118,22 +122,34 @@ def read_cursor(database, source):
 
 def save_page(database_path, source, after, page):
     notes, cursor, _ = page
+    inserted = 0
     with closing(sqlite3.connect(database_path)) as database, database:
         enforce_database_limit(database)
         database.execute("BEGIN IMMEDIATE")
         database.execute(SYNC_TABLE)
         if read_cursor(database, source) != after:
             raise RuntimeError("Der Abrufstand hat sich während des Downloads geändert.")
-        database.executemany(
-            "INSERT INTO notizen (id, absender, erstellt_utc, inhalt) VALUES (?, ?, ?, ?)",
-            notes,
-        )
+        for note in notes:
+            result = database.execute(
+                "INSERT INTO notizen (id, absender, erstellt_utc, inhalt) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(id) DO NOTHING",
+                note,
+            )
+            if result.rowcount:
+                inserted += 1
+                continue
+            stored_note = database.execute(
+                "SELECT id, absender, erstellt_utc, inhalt FROM notizen WHERE id = ?",
+                (note[0],),
+            ).fetchone()
+            if stored_note != note:
+                raise sqlite3.IntegrityError("Eine Notiz-ID ist bereits mit anderem Inhalt im Archiv.")
         database.execute(
             "INSERT INTO abrufstand (id, dienst, folge) VALUES (1, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET folge = excluded.folge",
             (source, cursor),
         )
-    return len(notes)
+    return inserted
 
 
 def import_batch(database_path, origin):

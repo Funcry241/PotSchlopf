@@ -61,6 +61,39 @@ class ArchiveTests(unittest.TestCase):
         self.assertTrue(fehler[0].startswith("Archivabruf unterbrochen."))
         self.assertIn("Zeitüberschreitung", fehler[0])
 
+    def test_continuous_import_waits_for_archive_to_be_available(self):
+        stdout, stderr = StringIO(), StringIO()
+        with TemporaryDirectory() as folder:
+            archive = Path(folder) / "archiv"
+
+            class Uhr:
+                # Erst beim ersten Warten taucht der Archivordner auf (wie ein spät eingehängtes Volume).
+                def wait(self, sekunden):
+                    if archive.exists():
+                        return True
+                    archive.mkdir()
+                    return False
+
+                def set(self):
+                    pass
+
+            with (
+                patch("sys.argv", ["abrufen.py", "--ordner", str(archive), "--dauerhaft"]),
+                patch.dict(os.environ, {"POTSCHLOPF_SERVICE_URL": "https://potschlopf.example"}),
+                patch("abrufen.os.umask"),
+                patch("abrufen.signal.signal"),
+                patch("abrufen.threading.Event", Uhr),
+                patch("abrufen.LEBENSZEICHEN", Path(folder) / "ok"),
+                patch("abrufen.fetch_page", return_value=([], 0, False)),
+                redirect_stdout(stdout),
+                redirect_stderr(stderr),
+            ):
+                self.assertEqual(main(), 0)
+
+            self.assertEqual(prepare_archive(archive / "potschlopf.sqlite3"), 0)
+        self.assertIn("Archivabruf konnte noch nicht starten.", stderr.getvalue())
+        self.assertIn("Archivabruf erfolgreich. Übernommene Notizen 0.", stdout.getvalue())
+
     def test_rejects_malformed_payload_before_storage(self):
         for payload in (
             page(record(2), record(1), cursor=1),
@@ -86,13 +119,16 @@ class ArchiveTests(unittest.TestCase):
                 self.assertEqual(import_batch(database, origin), 0)
                 fetch.assert_called_once_with(origin, 1)
 
-            duplicate = {**record(2), "id": record()["id"]}
+            replayed = {**record(), "folge": 2}
+            self.assertEqual(save_page(database, origin.netloc, 1, validate_page(page(replayed, cursor=2), 1)), 0)
+
+            conflicting = {**record(), "folge": 4, "inhalt": "Abweichender Inhalt"}
             with self.assertRaises(sqlite3.IntegrityError):
-                save_page(database, origin.netloc, 1, validate_page(page(record(2), {**duplicate, "folge": 3}, cursor=3), 1))
+                save_page(database, origin.netloc, 2, validate_page(page(record(3), conflicting, cursor=4), 2))
 
             with closing(sqlite3.connect(database)) as db:
                 self.assertEqual(db.execute("SELECT inhalt FROM notizen").fetchall(), [("Ein Text 🦦",)])
-                self.assertEqual(db.execute("SELECT folge FROM abrufstand").fetchone(), (1,))
+                self.assertEqual(db.execute("SELECT folge FROM abrufstand").fetchone(), (2,))
             with self.assertRaises(ValueError):
                 import_batch(database, urlsplit("https://anderer-dienst.example"))
             self.assertEqual(prepare_archive(database), 1)
