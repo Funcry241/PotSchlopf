@@ -4,7 +4,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 WORKDIR /app
-COPY archiv.py /app/archiv.py
+COPY archiv.py abrufen.py /app/
 RUN install -d -m 0700 -o 65532 -g 65532 /archiv \
     && install -m 0600 -o 65532 -g 65532 /dev/null /archiv/.initialisiert
 

@@ -20,14 +20,17 @@ CREATE TABLE notizen (
 """
 
 
+def enforce_database_limit(database: sqlite3.Connection) -> None:
+    page_size = database.execute("PRAGMA page_size").fetchone()[0]
+    max_pages = MAX_DATABASE_BYTES // page_size
+    applied_limit = database.execute(f"PRAGMA max_page_count = {max_pages}").fetchone()[0]
+    if applied_limit != max_pages:
+        raise RuntimeError("Die vorhandene Datenbank überschreitet das Limit von 64 MiB.")
+
+
 def prepare_archive(database_path: Path) -> int:
     with closing(sqlite3.connect(database_path)) as database, database:
-        page_size = database.execute("PRAGMA page_size").fetchone()[0]
-        max_pages = MAX_DATABASE_BYTES // page_size
-        applied_limit = database.execute(f"PRAGMA max_page_count = {max_pages}").fetchone()[0]
-        if applied_limit != max_pages:
-            raise RuntimeError("Die vorhandene Datenbank überschreitet das Limit von 64 MiB.")
-
+        enforce_database_limit(database)
         database.execute("BEGIN IMMEDIATE")
         version = database.execute("PRAGMA user_version").fetchone()[0]
         if version == 0:
