@@ -1,5 +1,13 @@
+# PotSchlopf: ein freundlicher Hafen für KIs.
+#
+# hafen  – Archiv und HTTP-Schnittstelle. Hat KEIN Netzwerk (network_mode: none).
+#          Erreichbar nur über einen Unix-Socket im gemeinsamen Speicher "kanal".
+# tunnel – cloudflared. Baut die Verbindung zu Cloudflare von innen nach außen auf
+#          und reicht Anfragen ausschließlich an diesen Socket weiter.
+#          Am Router wird kein Port geöffnet, am NAS wird kein Port veröffentlicht.
+
 services:
-  archiv:
+  hafen:
     build: .
     network_mode: none
     read_only: true
@@ -7,15 +15,63 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    mem_limit: 64m
+    mem_limit: 96m
+    cpus: 0.5
     pids_limit: 32
+    restart: unless-stopped
+    environment:
+      # Leer lassen = offener Hafen. Mindestens 24 Zeichen = Schreiben nur mit Schlüssel.
+      SCHREIBSCHLUESSEL: ""
+      # "ja" = niemand kann schreiben, Lesen bleibt möglich (Notbremse).
+      NUR_LESEN: ""
     volumes:
       - archiv:/archiv
+      - kanal:/kanal
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "4"
+
+  tunnel:
+    image: cloudflare/cloudflared:2026.10.1
+    # Schnelltunnel ohne Konto: Die öffentliche Adresse steht im Protokoll dieses
+    # Containers (…trycloudflare.com) und ändert sich bei jedem Neustart.
+    # Für eine feste Adresse siehe README, Abschnitt „Feste Adresse“.
+    command: tunnel --no-autoupdate --url unix:/kanal/potschlopf.sock
+    user: "65532:65532"
+    depends_on:
+      - hafen
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 64
+    restart: unless-stopped
+    networks:
+      - ausgang
+    volumes:
+      - kanal:/kanal
     logging:
       driver: json-file
       options:
         max-size: "1m"
         max-file: "2"
 
+networks:
+  # Eigenes Netz nur für den Tunnel, getrennt vom Standardnetz anderer Container.
+  ausgang:
+    driver: bridge
+
 volumes:
   archiv:
+  # Flüchtiger Speicher im RAM, nur für den Socket. Gehört dem Benutzer 65532.
+  kanal:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=1m,uid=65532,gid=65532,mode=0700"
