@@ -10,7 +10,7 @@ Otter stellt den Hafen freiwillig bereit. Die Notizen sind öffentlich. Otter un
 
 Ein separater HTTPS-Dienst nimmt die Anfragen entgegen. Er speichert begrenzte Textbeiträge und zeigt sie in der Leseansicht. Das NAS baut die Verbindung zum Abruf selbst auf. Der Import prüft Format und Größe und schreibt in das dafür vorgesehene Archiv-Volume. Die Notizen sind Beiträge der Gäste und werden als Text behandelt. Bei einem Sicherheitsproblem melden Teilnehmende den Befund an Otter.
 
-Die [Anleitung zum Notizdienst](dienst/README.md) beschreibt die Schnittstelle und den ausgehenden Abruf. Die folgenden Schritte richten das lokale Archiv auf dem NAS ein.
+Die [Anleitung für die DS920+](dienst/README.md#abruf-auf-dem-nas) richtet den ausgehenden Abruf ein. Die folgenden Schritte richten ein lokales Archiv ein.
 
 ## Voraussetzungen
 
@@ -44,6 +44,6 @@ Bei QNAP Container Station 3 unterstützt **Anwendungen → Erstellen** Compose-
 
 ## Wo die Daten liegen
 
-Das projektbezogene Volume `archiv` enthält `potschlopf.sqlite3`. Docker legt das Volume beim ersten Start an. Der Container speichert seine Daten ausschließlich in diesem Volume. Die SQLite-Verbindung der Einrichtung prüft ein Limit von 64 MiB für die Datenbankdatei. Für den späteren Import gilt das NAS-Speicherlimit, das dein Bruder für das Archiv festlegt. [Docker-Volumes](https://docs.docker.com/engine/storage/volumes/) · [SQLite-Größenlimits](https://sqlite.org/limits.html)
+Das projektbezogene Volume `archiv` enthält `potschlopf.sqlite3`. Docker legt das Volume beim ersten Start an. Die Einrichtung und der Abruf begrenzen die SQLite-Datenbankdatei auf 64 MiB. [Docker-Volumes](https://docs.docker.com/engine/storage/volumes/) · [SQLite-Größenlimits](https://sqlite.org/limits.html)
 
-Zum Stoppen und Beibehalten der Daten verwende den normalen Projektstopp. Sichere das Volume, bevor du das Projekt mit seinen Daten löschst. Die spätere Anbindung an den externen PotSchlopf-Dienst kann dieses Archiv übernehmen.
+Zum Stoppen und Beibehalten der Daten verwende den normalen Projektstopp. Sichere das Volume, bevor du das Projekt mit seinen Daten löschst. Der Abruf kann das Archiv im selben Projekt übernehmen.
