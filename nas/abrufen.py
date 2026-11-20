@@ -13,7 +13,7 @@ import sys
 from time import monotonic, sleep, time
 from urllib.parse import urlsplit
 
-from archiv import enforce_database_limit, prepare_archive
+from archiv import SCHEMA_VERSION, enforce_database_limit, prepare_archive
 
 
 PAGE_SIZE = 12
@@ -25,13 +25,11 @@ HEALTH_MAX_AGE_SECONDS = 15 * 60
 MAX_RESPONSE_BYTES = 160 * 1024
 MAX_SEQUENCE = 2**53 - 1
 NOTE_ID = re.compile(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")
-SYNC_TABLE = """
-CREATE TABLE IF NOT EXISTS abrufstand (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    dienst TEXT NOT NULL,
-    folge INTEGER NOT NULL CHECK (folge >= 0)
+# Dieselben Leerzeichen wie String.trim() im öffentlichen Notizdienst.
+TRIM_CHARS = (
+    "\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006"
+    "\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
 )
-"""
 
 
 def settings():
@@ -47,7 +45,7 @@ def settings():
 
 def text_feld(record, key, limit):
     value = record.get(key)
-    if (not isinstance(value, str) or not value.strip()
+    if (not isinstance(value, str) or not value.strip(TRIM_CHARS)
             or len(value.encode("utf-8")) > limit
             or any(ord(char) < 32 and char not in "\t\r\n" or ord(char) == 127 for char in value)):
         raise ValueError(f"Ungültiges Textfeld {key} im Archivabruf.")
@@ -117,6 +115,8 @@ def fetch_page(origin, after):
 
 
 def read_cursor(database, source):
+    if database.execute("PRAGMA user_version").fetchone() != (SCHEMA_VERSION,):
+        raise RuntimeError("Das eingerichtete Archiv fehlt. Bitte prüfe das Archiv-Volume.")
     record = database.execute("SELECT dienst, folge FROM abrufstand WHERE id = 1").fetchone()
     if record is None:
         return 0
@@ -125,13 +125,17 @@ def read_cursor(database, source):
     return record[1]
 
 
+def open_existing_archive(database_path):
+    # Nur die Einrichtung darf eine neue Datenbank anlegen.
+    return sqlite3.connect(database_path.resolve().as_uri() + "?mode=rw", uri=True)
+
+
 def save_page(database_path, source, after, page):
     notes, cursor, _ = page
     inserted = 0
-    with closing(sqlite3.connect(database_path)) as database, database:
+    with closing(open_existing_archive(database_path)) as database, database:
         enforce_database_limit(database)
         database.execute("BEGIN IMMEDIATE")
-        database.execute(SYNC_TABLE)
         if read_cursor(database, source) != after:
             raise RuntimeError("Der Abrufstand hat sich während des Downloads geändert.")
         for note in notes:
@@ -159,9 +163,7 @@ def save_page(database_path, source, after, page):
 
 def import_batch(database_path, origin):
     source = origin.netloc.lower()
-    with closing(sqlite3.connect(database_path)) as database, database:
-        enforce_database_limit(database)
-        database.execute(SYNC_TABLE)
+    with closing(open_existing_archive(database_path)) as database:
         cursor = read_cursor(database, source)
     imported = 0
     for _ in range(4):
