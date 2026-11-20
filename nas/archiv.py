@@ -18,6 +18,13 @@ CREATE TABLE notizen (
     inhalt TEXT NOT NULL CHECK (length(CAST(inhalt AS BLOB)) BETWEEN 1 AND 16384)
 )
 """
+CREATE_SYNC_STATE = """
+CREATE TABLE IF NOT EXISTS abrufstand (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    dienst TEXT NOT NULL,
+    folge INTEGER NOT NULL CHECK (folge >= 0)
+)
+"""
 
 
 def enforce_database_limit(database: sqlite3.Connection) -> None:
@@ -43,6 +50,7 @@ def prepare_archive(database_path: Path) -> int:
             raise RuntimeError(f"Die Archivversion {version} wird von diesem Paket nicht unterstützt.")
 
         run_write_probe(database)
+        database.execute(CREATE_SYNC_STATE)
 
     read_only_uri = database_path.resolve().as_uri() + "?mode=ro"
     with closing(sqlite3.connect(read_only_uri, uri=True)) as database:

@@ -9,7 +9,7 @@ from unittest.mock import patch
 from urllib.parse import urlsplit
 
 from abrufen import health_status, import_batch, main, save_page, validate_page
-from archiv import prepare_archive
+from archiv import CREATE_NOTES, prepare_archive
 
 
 def record(sequence=1):
@@ -123,10 +123,70 @@ class ArchiveTests(unittest.TestCase):
             page(record(), cursor=2),
             page(record(), more=True),
             page({**record(), "erstellt_utc": "kein Datum"}),
+            page({**record(), "inhalt": "\ufeff\u00a0"}),
         ):
             with self.subTest(payload_type=type(payload)):
                 with self.assertRaises(ValueError):
                     validate_page(payload, 0)
+
+    def test_service_text_and_following_note_are_archived_together(self):
+        # U+0085 bleibt nach String.trim() im Notizdienst erhalten.
+        first = {**record(), "absender": "\u0085", "inhalt": "\u0085"}
+        with TemporaryDirectory() as folder:
+            database = Path(folder) / "potschlopf.sqlite3"
+            prepare_archive(database)
+            notes = validate_page(page(first, record(2), cursor=2), 0)
+            self.assertEqual(save_page(database, "potschlopf.example", 0, notes), 2)
+            with closing(sqlite3.connect(database)) as db:
+                self.assertEqual(db.execute("SELECT absender, inhalt FROM notizen ORDER BY id").fetchall(),
+                                 [("\u0085", "\u0085"), ("Maus", "Ein Text 🦦")])
+                self.assertEqual(db.execute("SELECT folge FROM abrufstand").fetchone(), (2,))
+
+    def test_existing_archive_without_sync_table_keeps_its_notes(self):
+        with TemporaryDirectory() as folder:
+            database = Path(folder) / "potschlopf.sqlite3"
+            with closing(sqlite3.connect(database)) as db, db:
+                db.execute(CREATE_NOTES)
+                db.execute("PRAGMA user_version = 1")
+                db.execute("INSERT INTO notizen VALUES (?, ?, ?, ?)",
+                           ("bestehend", "Otter", "2026-11-19T19:30:00.000Z", "Vom ersten Tag"))
+            self.assertEqual(prepare_archive(database), 1)
+            self.assertEqual(save_page(database, "potschlopf.example", 0, validate_page(page(record()), 0)), 1)
+            with closing(sqlite3.connect(database)) as db:
+                self.assertEqual(db.execute("SELECT inhalt FROM notizen WHERE id = 'bestehend'").fetchone(),
+                                 ("Vom ersten Tag",))
+
+    def test_missing_archive_waits_and_resumes_at_saved_cursor(self):
+        origin = urlsplit("https://potschlopf.example")
+        with TemporaryDirectory() as folder:
+            database = Path(folder) / "potschlopf.sqlite3"
+            original = Path(folder) / "original.sqlite3"
+            prepare_archive(database)
+            save_page(database, origin.netloc, 0, validate_page(page(record()), 0))
+
+            def lose_archive_during_fetch(_origin, after):
+                database.rename(original)
+                return validate_page(page(cursor=after), after)
+
+            with patch("abrufen.fetch_page", side_effect=lose_archive_during_fetch):
+                with self.assertRaises(sqlite3.OperationalError):
+                    import_batch(database, origin)
+            self.assertFalse(database.exists())
+            with patch("abrufen.fetch_page") as fetch:
+                with self.assertRaises(sqlite3.OperationalError):
+                    import_batch(database, origin)
+                self.assertFalse(database.exists())
+                database.touch()
+                with self.assertRaisesRegex(RuntimeError, "Archiv-Volume"):
+                    import_batch(database, origin)
+                self.assertEqual(database.stat().st_size, 0)
+                fetch.assert_not_called()
+
+            original.replace(database)
+            with patch("abrufen.fetch_page", return_value=validate_page(page(record(2), cursor=2), 1)) as fetch:
+                self.assertEqual(import_batch(database, origin), 1)
+                fetch.assert_called_once_with(origin, 1)
+            self.assertEqual(prepare_archive(database), 2)
 
     def test_cursor_and_notes_commit_together_and_retries_are_consistent(self):
         with TemporaryDirectory() as folder:
