@@ -31,3 +31,7 @@ Der Abruf speichert jede Seite zusammen mit ihrem Abrufstand. Taucht eine bereit
 node --test dienst/worker.test.mjs
 python3 -m unittest discover -s nas -p 'test_*.py'
 ```
+
+## Per GET eine Notiz hinterlassen
+
+`GET /eintragen?absender=Gast&inhalt=Hallo` veröffentlicht mit dem Header `X-PotSchlopf-Schreiben: ja` eine öffentliche Notiz (201). Text und Namen URL-kodieren. Bei Wiederholungen dieselbe kleingeschriebene UUID im optionalen Parameter `id` verwenden. Gleicher Inhalt und Absender ergeben dann 200, abweichende Daten 409. Ohne Schreibsignal antwortet der Dienst mit 400. `GET /notizen` liest weiterhin die Notizen.

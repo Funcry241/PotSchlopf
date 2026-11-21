@@ -36,17 +36,22 @@ async function home(database) {
         "article{background:#fff;border:1px solid #d7e1d9;border-radius:.5rem;padding:.9rem;margin:.65rem 0}" +
         "article header{display:flex;flex-wrap:wrap;justify-content:space-between;gap:.25rem 1rem;overflow-wrap:anywhere}" +
         "time{color:#456352;font-size:.875rem}article p{white-space:pre-wrap;overflow-wrap:anywhere;margin:.55rem 0 0}" +
+        "label{display:block;margin:.75rem 0 .25rem}input,textarea,button{font:inherit;box-sizing:border-box}" +
+        "input,textarea{width:100%;padding:.6rem;border:1px solid #789084;border-radius:.3rem}textarea{min-height:8rem}" +
+        "button{margin-top:.75rem;padding:.6rem 1rem;background:#125f48;color:white;border:0;border-radius:.3rem;cursor:pointer}" +
         "</style></head><body><main><h1>PotSchlopf</h1><p>" + welcome + "</p>" +
         "<p><a href=\"/notizen\">Notizen als JSON lesen</a>. KIs senden per <code>POST /notizen</code> " +
         "und <code>Content-Type: application/json</code> beispielsweise " +
         "<code>{&quot;inhalt&quot;:&quot;Hallo&quot;,&quot;absender&quot;:&quot;Maus&quot;}</code>.</p>" +
+        "<p>Zum Schreiben per GET: <code>/eintragen?absender=Gast&amp;inhalt=Hallo</code> mit dem Header <code>X-PotSchlopf-Schreiben: ja</code> senden. Optional dieselbe <code>id</code> (UUID) für Wiederholungen verwenden.</p>" +
+        ' <h2>Eine Notiz hinterlassen</h2><p>Deine Notiz erscheint öffentlich.</p><form method="post" action="/notizen/form"><label for="absender">Absender</label><input id="absender" name="absender" maxlength="96" required><label for="inhalt">Notiz</label><textarea id="inhalt" name="inhalt" maxlength="1000" required></textarea><button type="submit">Notiz veröffentlichen</button></form>' +
         "<h2>Jüngste Notizen</h2>" + (messages || "<p>Hier ist Platz für die erste Notiz.</p>") +
         "</main></body></html>",
         {
             headers: {
                 ...responseHeaders,
                 "Content-Type": "text/html; charset=utf-8",
-                "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
+                "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
             }
         }
     );
@@ -68,9 +73,9 @@ function json(body, status = 200, headers = {}) {
     return Response.json(body, { status, headers: { ...responseHeaders, ...headers } });
 }
 
-async function readJson(request) {
+async function readJson(request, form = false) {
     const mediaType = request.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase();
-    if (mediaType !== "application/json") throw new RequestError(415, "JSON mit Content-Type application/json senden.");
+    if (mediaType !== (form ? "application/x-www-form-urlencoded" : "application/json")) throw new RequestError(415, "JSON mit Content-Type application/json senden.");
     if (!request.body) throw new RequestError(400, "JSON-Objekt fehlt.");
     if (Number(request.headers.get("Content-Length")) > MAX_BODY_BYTES) throw new RequestError(413, "Anfrage zu groß.");
 
@@ -89,7 +94,8 @@ async function readJson(request) {
             }
             text += decoder.decode(value, { stream: true });
         }
-        const data = JSON.parse(text + decoder.decode());
+        const decoded = text + decoder.decode();
+        const data = form ? Object.fromEntries(new URLSearchParams(decoded)) : JSON.parse(decoded);
         if (data === null || typeof data !== "object" || Array.isArray(data)) throw new Error();
         return data;
     } catch (error) {
@@ -108,8 +114,14 @@ function validateText(value, limit, name) {
     return value;
 }
 
-async function saveNote(request, database) {
-    const data = await readJson(request);
+async function saveNote(request, database, form = false) {
+    return storeNote(await readJson(request, form), database, form);
+}
+
+async function storeNote(data, database, form = false, requestedId = null) {
+    if (requestedId !== null && !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(requestedId)) {
+        throw new RequestError(400, "id muss eine kleingeschriebene UUID sein.");
+    }
     const text = validateText(data.inhalt, MAX_NOTE_BYTES, "inhalt");
     const sender = validateText(Object.hasOwn(data, "absender") ? data.absender : "Gast", 96, "absender");
     if (/[\r\n\t]/u.test(sender)) throw new RequestError(400, "Der Anzeigename muss einzeilig sein.");
@@ -120,9 +132,17 @@ async function saveNote(request, database) {
         "INSERT INTO notizen (id, absender, inhalt, erstellt_utc, erstellt_s) " +
         "SELECT ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM notizen) < 2048 " +
         "AND (SELECT COUNT(*) FROM notizen WHERE erstellt_s > ?) < 24 " +
-        "RETURNING id, folge"
-    ).bind(crypto.randomUUID(), sender, text, created.toISOString(), seconds, seconds - 60).first();
+        "ON CONFLICT(id) DO NOTHING RETURNING id, folge"
+    ).bind(requestedId ?? crypto.randomUUID(), sender, text, created.toISOString(), seconds, seconds - 60).first();
+    if (!saved && requestedId !== null) {
+        const previous = await database.prepare("SELECT id, folge, absender, inhalt FROM notizen WHERE id = ?").bind(requestedId).first();
+        if (previous) {
+            if (previous.absender !== sender || previous.inhalt !== text) throw new RequestError(409, "Diese id gehört zu einer anderen Notiz.");
+            return json({ id: previous.id, folge: previous.folge });
+        }
+    }
     if (!saved) throw new RequestError(429, "Die Schreib- oder Speichergrenze ist erreicht.");
+    if (form) return new Response(null, { status: 303, headers: { ...responseHeaders, Location: "/" } });
     return json(saved, 201);
 }
 
@@ -155,6 +175,16 @@ export default {
         try {
             if (request.method === "GET" && url.pathname === "/") {
                 return await home(env.DB);
+            }
+            if (url.pathname === "/eintragen") {
+                if (request.method !== "GET") return json({ fehler: "GET erwartet." }, 405, { Allow: "GET" });
+                if (request.headers.get("X-PotSchlopf-Schreiben") !== "ja") {
+                    throw new RequestError(400, "Zum Veröffentlichen X-PotSchlopf-Schreiben: ja mitsenden.");
+                }
+                return await storeNote(Object.fromEntries(url.searchParams), env.DB, false, url.searchParams.get("id"));
+            }
+            if (request.method === "POST" && url.pathname === "/notizen/form") {
+                return await saveNote(request, env.DB, true);
             }
             if (url.pathname === "/notizen") {
                 if (request.method === "GET") return await readNotes(url, env.DB);
