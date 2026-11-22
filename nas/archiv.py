@@ -1,8 +1,10 @@
 import argparse
 from contextlib import closing
 from datetime import UTC, datetime
+from hashlib import sha256
 import os
 from pathlib import Path
+import re
 import sqlite3
 import sys
 from uuid import uuid4
@@ -10,6 +12,7 @@ from uuid import uuid4
 
 SCHEMA_VERSION = 1
 MAX_DATABASE_BYTES = 64 * 1024 * 1024
+NOTE_ID = re.compile(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")
 CREATE_NOTES = """
 CREATE TABLE notizen (
     id TEXT PRIMARY KEY NOT NULL,
@@ -25,6 +28,37 @@ CREATE TABLE IF NOT EXISTS abrufstand (
     folge INTEGER NOT NULL CHECK (folge >= 0)
 )
 """
+CREATE_DELETIONS = """
+CREATE TABLE IF NOT EXISTS geloescht (
+    id_hash BLOB PRIMARY KEY NOT NULL
+) WITHOUT ROWID
+"""
+
+
+def open_existing_archive(database_path):
+    # Nur die Einrichtung darf eine neue Datenbank anlegen.
+    return sqlite3.connect(database_path.resolve().as_uri() + "?mode=rw", uri=True)
+
+
+def id_hash(note_id):
+    return sha256(note_id.encode("ascii")).digest()
+
+
+def delete_note(database_path: Path, note_id: str) -> bool:
+    note_id = note_id.lower()
+    if not NOTE_ID.fullmatch(note_id):
+        raise ValueError("Bitte die vollständige Notiz-ID mit Bindestrichen eingeben.")
+    with closing(open_existing_archive(database_path)) as database, database:
+        enforce_database_limit(database)
+        database.execute("PRAGMA secure_delete = ON")
+        database.execute("BEGIN IMMEDIATE")
+        if database.execute("PRAGMA user_version").fetchone() != (SCHEMA_VERSION,):
+            raise RuntimeError("Die Datei ist kein unterstütztes PotSchlopf-Archiv.")
+        deleted = database.execute("DELETE FROM notizen WHERE id = ?", (note_id,)).rowcount
+        database.execute(CREATE_DELETIONS)
+        database.execute("INSERT INTO geloescht (id_hash) VALUES (?) ON CONFLICT DO NOTHING",
+                         (id_hash(note_id),))
+        return bool(deleted)
 
 
 def enforce_database_limit(database: sqlite3.Connection) -> None:
@@ -51,6 +85,7 @@ def prepare_archive(database_path: Path) -> int:
 
         run_write_probe(database)
         database.execute(CREATE_SYNC_STATE)
+        database.execute(CREATE_DELETIONS)
 
     read_only_uri = database_path.resolve().as_uri() + "?mode=ro"
     with closing(sqlite3.connect(read_only_uri, uri=True)) as database:
@@ -77,11 +112,23 @@ def run_write_probe(database: sqlite3.Connection) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Privates PotSchlopf-Archiv einrichten und prüfen.")
     parser.add_argument("--ordner", type=Path, default=Path("/archiv"))
+    parser.add_argument("--loeschen", metavar="NOTIZ-ID",
+                        help="Eine Notiz aus dem lokalen Archiv entfernen und ihren erneuten Import sperren.")
     args = parser.parse_args()
 
     os.umask(0o077)
+    database_path = args.ordner / "potschlopf.sqlite3"
+    if args.loeschen is not None:
+        try:
+            deleted = delete_note(database_path, args.loeschen)
+        except (OSError, ValueError, RuntimeError, sqlite3.Error) as error:
+            print(f"Die Archivlöschung ist fehlgeschlagen. {error}", file=sys.stderr)
+            return 1
+        print("Notiz aus dem Archiv gelöscht." if deleted else "Diese Notiz ist im Archiv nicht vorhanden.")
+        print("Erneuter Import dieser Notiz-ID gesperrt.")
+        return 0
     try:
-        note_count = prepare_archive(args.ordner / "potschlopf.sqlite3")
+        note_count = prepare_archive(database_path)
     except (OSError, RuntimeError, sqlite3.Error) as error:
         print(f"Das Archiv konnte nicht eingerichtet werden. {error}", file=sys.stderr)
         return 1

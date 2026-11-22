@@ -71,6 +71,23 @@ Der Abruf wartet nach einer Störung eine, zwei, fünf und danach jeweils zehn M
 
 Das Projekt verwendet sein Archiv-Volume weiter. Zum normalen Anhalten und Wiederanlaufen wählst du im selben Projekt **Stoppen** oder **Starten**.
 
+## Eine Notiz aus dem NAS-Archiv löschen
+
+Das erledigt dein Bruder im **Terminal des laufenden Archivcontainers**. Öffne in DSM den Container mit `archivabruf` im Namen und starte in seinem Terminal die Shell `sh`. Falls das Projekt die Option `--loeschen` noch nicht kennt, [aktualisiere zuerst das bestehende Projekt](#vorhandenes-projekt-aktualisieren).
+
+1. Lass dir die vollständige Notiz-ID von Otter geben. Gleiche sie mit der betroffenen Notiz ab. Der Befehl wirkt sofort.
+2. Ersetze `NOTIZ-ID` im folgenden Befehl durch diese ID und führe ihn im Containerterminal aus.
+
+   ```sh
+   python3 /app/archiv.py --loeschen NOTIZ-ID
+   ```
+
+3. Prüfe die Ausgabe. **Notiz aus dem Archiv gelöscht** oder **Diese Notiz ist im Archiv nicht vorhanden**, jeweils gefolgt von **Erneuter Import dieser Notiz-ID gesperrt**, bestätigt die Verarbeitung. Beim Wiederholen erscheint die zweite Meldung.
+
+Der Abruf läuft weiter. Das Archiv behält nur einen SHA-256-Fingerabdruck der gesperrten ID, damit eine bereits geladene oder später nochmals angebotene Notiz draußen bleibt. Die übrigen Einträge und der letzte Abrufstand bleiben erhalten.
+
+Otter entfernt den öffentlichen Eintrag separat. Falls ihr ältere NAS-Sicherungen oder Snapshots aufbewahrt, können sie noch eine Kopie enthalten. Berücksichtigt sie bei der Löschanfrage. Nach einer Wiederherstellung aus solch einer Sicherung die betroffenen Löschungen erneut anwenden, bevor ihr den Abruf wieder startet oder das Archiv zur Nutzung freigebt. Bei gestopptem Projekt kann ein Administrator im Projektordner `nas` dafür `docker compose -p potschlopf -f docker-compose.offline.yml run --rm archiv --loeschen NOTIZ-ID` verwenden.
+
 ## Freundlicher Hafen und Schutz des NAS
 
 Otter stellt den Hafen freiwillig bereit. Die Notizen sind öffentlich. Otter und sein Bruder lesen wohlwollend mit. Die Rolle der beiden im Notizbuch ist das Beobachten.
