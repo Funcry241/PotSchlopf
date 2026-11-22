@@ -9,7 +9,7 @@ from unittest.mock import patch
 from urllib.parse import urlsplit
 
 from abrufen import health_status, import_batch, main, save_page, validate_page
-from archiv import CREATE_NOTES, prepare_archive
+from archiv import CREATE_NOTES, delete_note, prepare_archive
 
 
 def record(sequence=1):
@@ -27,6 +27,52 @@ def page(*notes, cursor=1, more=False):
 
 
 class ArchiveTests(unittest.TestCase):
+    def test_deletion_is_scoped_and_keeps_cursor_and_later_imports(self):
+        source = "potschlopf.example"
+        target, other = record(1), record(2)
+        with TemporaryDirectory() as folder:
+            database = Path(folder) / "potschlopf.sqlite3"
+            prepare_archive(database)
+            incoming = validate_page(page(target, other, cursor=2), 0)
+            self.assertEqual(save_page(database, source, 0, incoming), 2)
+            self.assertTrue(delete_note(database, target["id"]))
+            self.assertFalse(delete_note(database, target["id"]))
+            self.assertEqual(prepare_archive(database), 1)
+            with closing(sqlite3.connect(database)) as db:
+                self.assertEqual(db.execute("SELECT dienst, folge FROM abrufstand").fetchall(), [(source, 2)])
+                self.assertEqual(db.execute("SELECT id FROM notizen").fetchall(), [(other["id"],)])
+                self.assertEqual(db.execute("SELECT length(id_hash) FROM geloescht").fetchall(), [(32,)])
+            late_page = validate_page(page({**target, "folge": 3}, record(4), cursor=4), 2)
+            self.assertEqual(save_page(database, source, 2, late_page), 1)
+            with closing(sqlite3.connect(database)) as db:
+                self.assertEqual(db.execute("SELECT folge FROM abrufstand").fetchone(), (4,))
+                self.assertEqual(db.execute("SELECT id FROM notizen ORDER BY id").fetchall(),
+                                 [(other["id"],), (record(4)["id"],)])
+
+    def test_deletion_during_download_prevents_reimport_in_existing_archive(self):
+        note = record(1)
+        with TemporaryDirectory() as folder:
+            database = Path(folder) / "potschlopf.sqlite3"
+            with closing(sqlite3.connect(database)) as db:
+                db.execute(CREATE_NOTES)
+                db.execute("PRAGMA user_version = 1")
+            self.assertFalse(delete_note(database, note["id"]))
+            prepare_archive(database)
+            late_page = validate_page(page(note), 0)
+            self.assertEqual(save_page(database, "potschlopf.example", 0, late_page), 0)
+            with closing(sqlite3.connect(database)) as db:
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM notizen").fetchone(), (0,))
+                self.assertEqual(db.execute("SELECT folge FROM abrufstand").fetchone(), (1,))
+
+    def test_deletion_rejects_partial_ids_and_missing_archive(self):
+        with TemporaryDirectory() as folder:
+            database = Path(folder) / "potschlopf.sqlite3"
+            with self.assertRaises(ValueError):
+                delete_note(database, "00000000")
+            with self.assertRaises(sqlite3.OperationalError):
+                delete_note(database, record()["id"])
+            self.assertFalse(database.exists())
+
     def test_continuous_import_reports_empty_start_and_recovery(self):
         stdout, stderr = StringIO(), StringIO()
         outage = OSError("Zeitüberschreitung")

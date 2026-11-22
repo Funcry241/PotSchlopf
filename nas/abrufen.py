@@ -6,14 +6,14 @@ from http.client import HTTPSConnection, HTTPException
 import json
 import os
 from pathlib import Path
-import re
 import signal
 import sqlite3
 import sys
 from time import monotonic, sleep, time
 from urllib.parse import urlsplit
 
-from archiv import SCHEMA_VERSION, enforce_database_limit, prepare_archive
+from archiv import (NOTE_ID, SCHEMA_VERSION, enforce_database_limit, id_hash,
+                    open_existing_archive, prepare_archive)
 
 
 PAGE_SIZE = 12
@@ -24,7 +24,6 @@ LAST_SUCCESS_FILE = Path("/tmp/potschlopf-letzter-erfolg")
 HEALTH_MAX_AGE_SECONDS = 15 * 60
 MAX_RESPONSE_BYTES = 160 * 1024
 MAX_SEQUENCE = 2**53 - 1
-NOTE_ID = re.compile(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")
 # Dieselben Leerzeichen wie String.trim() im öffentlichen Notizdienst.
 TRIM_CHARS = (
     "\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006"
@@ -125,11 +124,6 @@ def read_cursor(database, source):
     return record[1]
 
 
-def open_existing_archive(database_path):
-    # Nur die Einrichtung darf eine neue Datenbank anlegen.
-    return sqlite3.connect(database_path.resolve().as_uri() + "?mode=rw", uri=True)
-
-
 def save_page(database_path, source, after, page):
     notes, cursor, _ = page
     inserted = 0
@@ -139,6 +133,9 @@ def save_page(database_path, source, after, page):
         if read_cursor(database, source) != after:
             raise RuntimeError("Der Abrufstand hat sich während des Downloads geändert.")
         for note in notes:
+            if database.execute("SELECT 1 FROM geloescht WHERE id_hash = ?",
+                                (id_hash(note[0]),)).fetchone():
+                continue
             result = database.execute(
                 "INSERT INTO notizen (id, absender, erstellt_utc, inhalt) VALUES (?, ?, ?, ?) "
                 "ON CONFLICT(id) DO NOTHING",
